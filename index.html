@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Milkrun Route Planner</title>
+  <style>
+    :root {
+      --blue: #2563eb; --blue-lt: #eff6ff;
+      --green: #16a34a; --red: #dc2626;
+      --bg: #f1f5f9; --card: #fff;
+      --border: #e2e8f0; --text: #0f172a; --muted: #64748b;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; padding: 28px 16px 64px;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; }
+
+    /* Header */
+    header { margin-bottom: 32px; }
+    h1 { font-size: 1.75rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .sub { color: var(--muted); font-size: .92rem; margin-top: 5px; }
+
+    /* Cards */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 18px; }
+    .card-title { font-weight: 600; font-size: 1rem; margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+    .step-num {
+      width: 26px; height: 26px; background: var(--blue); color: #fff;
+      border-radius: 50%; font-size: .76rem; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+
+    /* Drop zones */
+    .drop {
+      border: 2px dashed var(--border); border-radius: 8px;
+      padding: 28px; text-align: center; cursor: pointer;
+      transition: border-color .15s, background .15s; position: relative;
+    }
+    .drop:hover, .drop.over { border-color: var(--blue); background: var(--blue-lt); }
+    .drop input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .drop-icon { font-size: 1.7rem; }
+    .drop-main { font-weight: 500; margin: 6px 0 3px; font-size: .95rem; }
+    .drop-hint { font-size: .82rem; color: var(--muted); }
+    .file-ok { display: none; align-items: center; gap: 6px; color: var(--green); font-size: .88rem; margin-top: 10px; }
+
+    /* Form */
+    .divider { text-align: center; color: var(--muted); font-size: .82rem; margin: 14px 0; }
+    label { font-size: .82rem; font-weight: 500; color: var(--muted); display: block; margin-bottom: 5px; }
+    input[type=text], input[type=number], textarea {
+      width: 100%; padding: 9px 12px; border: 1px solid var(--border);
+      border-radius: 8px; font-size: .9rem; font-family: inherit; transition: border-color .15s;
+    }
+    input:focus, textarea:focus { outline: none; border-color: var(--blue); }
+    textarea { resize: vertical; min-height: 80px; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    /* Buttons */
+    .btn { padding: 11px 26px; border: none; border-radius: 8px; font-size: .94rem; font-weight: 600; cursor: pointer; transition: background .15s; }
+    .btn-primary { background: var(--blue); color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-dl { background: var(--green); color: #fff; }
+    .btn-dl:hover { background: #15803d; }
+    .action-row { display: flex; align-items: center; gap: 14px; }
+
+    /* Alerts */
+    .alert { padding: 10px 14px; border-radius: 8px; font-size: .85rem; margin-bottom: 14px; }
+    .alert-warn { background: #fef9c3; border: 1px solid #fde047; color: #713f12; }
+    .alert-err  { background: #fee2e2; border: 1px solid #fca5a5; color: #7f1d1d; }
+
+    /* Results */
+    .results { display: none; margin-top: 24px; }
+    .results.show { display: block; }
+    .res-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+    .res-title { font-weight: 700; font-size: 1.1rem; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+    .stat { background: var(--blue-lt); border-radius: 8px; padding: 14px 18px; text-align: center; flex: 1; min-width: 110px; }
+    .stat-n { font-size: 1.45rem; font-weight: 700; color: var(--blue); }
+    .stat-l { font-size: .78rem; color: var(--muted); margin-top: 2px; }
+
+    /* Cluster rows */
+    .cl-header {
+      display: flex; align-items: center; gap: 10px;
+      background: #f8fafc; border: 1px solid var(--border);
+      border-radius: 8px; padding: 9px 14px;
+      margin: 20px 0 6px; font-weight: 600; font-size: .88rem;
+    }
+    .cl-badge { background: var(--blue); color: #fff; padding: 2px 9px; border-radius: 10px; font-size: .72rem; }
+    .cl-km { color: var(--muted); font-size: .8rem; margin-left: auto; }
+
+    /* Table */
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+    th { background: #f8fafc; padding: 9px 14px; text-align: left; font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 2px solid var(--border); }
+    td { padding: 9px 14px; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f8fafc; }
+    .mono { font-family: monospace; font-weight: 500; }
+    .dim  { color: var(--muted); }
+    .hi   { font-weight: 700; color: var(--blue); }
+
+    @media (max-width: 560px) { .row2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+      Milkrun Route Planner
+    </h1>
+    <p class="sub">Upload your pincode geocoding database and a list of delivery pincodes to compute optimised milk run routes.</p>
+  </header>
+
+  <!-- Step 1: Geocoding DB -->
+  <div class="card">
+    <div class="card-title"><div class="step-num">1</div> Upload Geocoding Database</div>
+    <div class="drop" id="dbDrop">
+      <input type="file" id="dbFile" accept=".csv" />
+      <div class="drop-icon">📂</div>
+      <div class="drop-main">Drop <strong>Milkrun Routing Final.csv</strong> here</div>
+      <div class="drop-hint">or click to browse — CSV must have <code>pincode</code>, <code>lat</code>, <code>lng</code> columns</div>
+    </div>
+    <div class="file-ok" id="dbOk">✅ <span id="dbLabel"></span></div>
+  </div>
+
+  <!-- Step 2: Delivery Pincodes -->
+  <div class="card">
+    <div class="card-title"><div class="step-num">2</div> Delivery Pincodes</div>
+    <div class="drop" id="pcDrop">
+      <input type="file" id="pcFile" accept=".csv,.txt" />
+      <div class="drop-icon">📋</div>
+      <div class="drop-main">Drop a CSV or TXT file of delivery pincodes</div>
+      <div class="drop-hint">One pincode per row, or a CSV with a pincode column</div>
+    </div>
+    <div class="file-ok" id="pcOk">✅ <span id="pcLabel"></span></div>
+    <div class="divider">— or paste pincodes below —</div>
+    <label>Pincodes (comma or newline separated)</label>
+    <textarea id="pcArea" placeholder="515402, 515408, 515413, 515401, 515415 ..."></textarea>
+  </div>
+
+  <!-- Step 3: Config -->
+  <div class="card">
+    <div class="card-title"><div class="step-num">3</div> Configuration</div>
+    <div class="row2">
+      <div>
+        <label>Origin Pincode (depot)</label>
+        <input type="text" id="originPin" value="500108" />
+      </div>
+      <div>
+        <label>Max Stops per Cluster</label>
+        <input type="number" id="maxStops" value="10" min="1" max="50" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Compute -->
+  <div class="action-row">
+    <button class="btn btn-primary" id="computeBtn" onclick="compute()" disabled>Compute Routes</button>
+  </div>
+
+  <!-- Results -->
+  <div class="results" id="results">
+    <div class="card">
+      <div class="res-head">
+        <span class="res-title">Routing Results</span>
+        <button class="btn btn-dl" onclick="dlCSV()">⬇ Download CSV</button>
+      </div>
+      <div id="alertArea"></div>
+      <div class="stats" id="statsArea"></div>
+      <div id="tableArea"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+let geoMap   = null;   // Map<pincode_str, {lat, lng}>
+let filePins = [];     // pincodes loaded from file upload
+let exportRows = [];   // flattened rows for CSV download
+
+// ── Drop zone wiring ──────────────────────────────────────────────────
+function bindDrop(zoneId, inputId, handler) {
+  const zone = document.getElementById(zoneId);
+  const inp  = document.getElementById(inputId);
+  zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('over');
+    if (e.dataTransfer.files[0]) handler(e.dataTransfer.files[0]);
+  });
+  inp.addEventListener('change', () => { if (inp.files[0]) handler(inp.files[0]); });
+}
+
+// ── Load geocoding DB ─────────────────────────────────────────────────
+bindDrop('dbDrop', 'dbFile', file => {
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete({ data }) {
+      geoMap = new Map();
+      for (const r of data) {
+        const pin = String(r.pincode ?? r.Pincode ?? r.PINCODE ?? '').trim();
+        const lat = parseFloat(r.lat ?? r.Lat ?? r.latitude ?? r.Latitude ?? '');
+        const lng = parseFloat(r.lng ?? r.Lng ?? r.lon ?? r.longitude ?? r.Longitude ?? '');
+        if (pin && !isNaN(lat) && !isNaN(lng)) geoMap.set(pin, { lat, lng });
+      }
+      document.getElementById('dbOk').style.display = 'flex';
+      document.getElementById('dbLabel').textContent =
+        `${file.name}  —  ${geoMap.size.toLocaleString()} pincodes loaded`;
+      checkReady();
+    },
+    error: e => alert('Could not parse DB file: ' + e.message)
+  });
+});
+
+// ── Load delivery pincodes ────────────────────────────────────────────
+bindDrop('pcDrop', 'pcFile', file => {
+  const reader = new FileReader();
+  reader.onload = e => {
+    filePins = parsePins(e.target.result);
+    document.getElementById('pcOk').style.display = 'flex';
+    document.getElementById('pcLabel').textContent =
+      `${file.name}  —  ${filePins.length} pincodes found`;
+    document.getElementById('pcArea').value = '';
+    checkReady();
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById('pcArea').addEventListener('input', () => {
+  filePins = [];
+  document.getElementById('pcOk').style.display = 'none';
+  checkReady();
+});
+
+// ── Parse pincodes from raw text ──────────────────────────────────────
+function parsePins(text) {
+  const seen = new Set();
+  const pins = [];
+  for (const tok of text.split(/[\s,;|\t\r\n]+/)) {
+    const s = tok.trim().replace(/\D/g, '');
+    if (/^[1-9]\d{5}$/.test(s) && !seen.has(s)) { seen.add(s); pins.push(s); }
+  }
+  return pins;
+}
+
+// ── Enable compute button when both inputs are ready ──────────────────
+function checkReady() {
+  const hasPins = filePins.length > 0 ||
+                  parsePins(document.getElementById('pcArea').value).length > 0;
+  document.getElementById('computeBtn').disabled = !(geoMap?.size && hasPins);
+}
+
+// ── Haversine × 1.25 road-distance factor ────────────────────────────
+const DEG = Math.PI / 180;
+function dist(lat1, lng1, lat2, lng2) {
+  const a = Math.sin((lat2 - lat1) * DEG / 2) ** 2
+          + Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG)
+          * Math.sin((lng2 - lng1) * DEG / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 1.25;
+}
+
+// ── Compass bearing (0–360°) from point A to point B ─────────────────
+function bearing(lat1, lng1, lat2, lng2) {
+  const dL = (lng2 - lng1) * DEG;
+  const y  = Math.sin(dL) * Math.cos(lat2 * DEG);
+  const x  = Math.cos(lat1 * DEG) * Math.sin(lat2 * DEG)
+           - Math.sin(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.cos(dL);
+  return (Math.atan2(y, x) / DEG + 360) % 360;
+}
+
+// ── Nearest-Neighbour greedy tour ─────────────────────────────────────
+function nearestNeighbour(oLat, oLng, stops) {
+  const pool = [...stops];
+  const tour = [];
+  let cLat = oLat, cLng = oLng;
+  while (pool.length) {
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const d = dist(cLat, cLng, pool[i].lat, pool[i].lng);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    const s = pool.splice(bi, 1)[0];
+    tour.push({ ...s, leg: bd });
+    cLat = s.lat; cLng = s.lng;
+  }
+  return tour;
+}
+
+// ── Main compute ──────────────────────────────────────────────────────
+function compute() {
+  const originPin = document.getElementById('originPin').value.trim();
+  const maxStops  = Math.max(1, parseInt(document.getElementById('maxStops').value) || 10);
+
+  const inputPins = filePins.length
+    ? filePins
+    : parsePins(document.getElementById('pcArea').value);
+
+  // Validate origin
+  if (!geoMap.has(originPin)) {
+    renderErr(`Origin pincode <strong>${originPin}</strong> not found in the geocoding database.`);
+    return;
+  }
+
+  const { lat: oLat, lng: oLng } = geoMap.get(originPin);
+
+  // Resolve delivery pincodes
+  const notFound = [], stops = [];
+  const seen = new Set([originPin]);
+  for (const p of inputPins) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    if (!geoMap.has(p)) { notFound.push(p); continue; }
+    const { lat, lng } = geoMap.get(p);
+    stops.push({ pin: p, lat, lng });
+  }
+
+  if (!stops.length) {
+    renderErr('No valid delivery pincodes found in the database. Please check your input.');
+    return;
+  }
+
+  // Cluster by bearing angle from origin (sorted, chunks of maxStops)
+  stops.sort((a, b) => bearing(oLat, oLng, a.lat, a.lng) - bearing(oLat, oLng, b.lat, b.lng));
+  const clusters = [];
+  for (let i = 0; i < stops.length; i += maxStops) clusters.push(stops.slice(i, i + maxStops));
+
+  // Route each cluster
+  exportRows = [];
+  let tableHtml = '';
+  let longestKm = 0;
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const tour = nearestNeighbour(oLat, oLng, clusters[ci]);
+    let cum = 0;
+
+    tableHtml += `
+      <div class="cl-header">
+        <span class="cl-badge">Cluster ${ci + 1}</span>
+        <span>${tour.length} stop${tour.length !== 1 ? 's' : ''}</span>
+        <span class="cl-km" id="clkm${ci}"></span>
+      </div>
+      <div class="tbl-wrap"><table>
+        <thead><tr>
+          <th>Visit #</th><th>From Pincode</th><th>To Pincode</th>
+          <th>Leg (km)</th><th>Cumulative (km)</th>
+        </tr></thead><tbody>`;
+
+    for (let vi = 0; vi < tour.length; vi++) {
+      const { pin, leg } = tour[vi];
+      cum += leg;
+      const from = vi === 0 ? originPin : tour[vi - 1].pin;
+      tableHtml += `<tr>
+        <td>${vi + 1}</td>
+        <td class="mono">${from}</td>
+        <td class="mono">${pin}</td>
+        <td class="dim">${leg.toFixed(2)}</td>
+        <td class="hi">${cum.toFixed(2)}</td>
+      </tr>`;
+      exportRows.push({ cluster: `Cluster ${ci + 1}`, visit: vi + 1,
+                        from, to: pin, leg: leg.toFixed(2), cum: cum.toFixed(2) });
+    }
+
+    tableHtml += `</tbody></table></div>`;
+    longestKm = Math.max(longestKm, cum);
+    // Inject cumulative into header after we know it
+    tableHtml = tableHtml.replace(
+      `id="clkm${ci}"`,
+      `id="clkm${ci}" style="display:inline">${'Total: ' + cum.toFixed(1) + ' km'}</span><span`
+    );
+  }
+
+  // Stats bar
+  document.getElementById('statsArea').innerHTML = `
+    <div class="stat">
+      <div class="stat-n">${clusters.length}</div>
+      <div class="stat-l">Clusters</div>
+    </div>
+    <div class="stat">
+      <div class="stat-n">${stops.length}</div>
+      <div class="stat-l">Stops Routed</div>
+    </div>
+    <div class="stat">
+      <div class="stat-n">${longestKm.toFixed(0)} km</div>
+      <div class="stat-l">Longest Route</div>
+    </div>
+    ${notFound.length ? `<div class="stat" style="background:#fee2e2">
+      <div class="stat-n" style="color:var(--red)">${notFound.length}</div>
+      <div class="stat-l">Skipped</div>
+    </div>` : ''}
+  `;
+
+  // Warning for unknown pincodes
+  document.getElementById('alertArea').innerHTML = notFound.length
+    ? `<div class="alert alert-warn">
+        ⚠ ${notFound.length} pincode(s) not found in the database and were skipped:
+        ${notFound.slice(0, 10).join(', ')}${notFound.length > 10 ? ' …' : ''}
+       </div>`
+    : '';
+
+  document.getElementById('tableArea').innerHTML = tableHtml;
+
+  const res = document.getElementById('results');
+  res.classList.add('show');
+  res.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── CSV download ──────────────────────────────────────────────────────
+function dlCSV() {
+  if (!exportRows.length) return;
+  const header = ['Cluster', 'Visit #', 'Origin Pincode', 'Destination Pincode', 'Leg (km)', 'Cumulative (km)'];
+  const lines  = exportRows.map(r =>
+    [r.cluster, r.visit, r.from, r.to, r.leg, r.cum].join(','));
+  const blob = new Blob([[header.join(','), ...lines].join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'milkrun_routing.csv';
+  a.click();
+}
+
+// ── Error helper ──────────────────────────────────────────────────────
+function renderErr(msg) {
+  document.getElementById('alertArea').innerHTML =
+    `<div class="alert alert-err">❌ ${msg}</div>`;
+  document.getElementById('statsArea').innerHTML  = '';
+  document.getElementById('tableArea').innerHTML  = '';
+  document.getElementById('results').classList.add('show');
+}
+</script>
+</body>
+</html>
