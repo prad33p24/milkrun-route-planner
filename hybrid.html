@@ -431,6 +431,54 @@ function hybridCluster(stops, oLat, oLng, maxStops) {
   return clusters.filter(c => c.length > 0);
 }
 
+// ── Minimum cluster size enforcement ─────────────────────────────────
+const MIN_STOPS = 4;
+
+function enforceMinClusterSize(clusters, maxStops) {
+  let result = clusters.map(c => [...c]);
+
+  for (let iter = 0; iter < 10; iter++) {
+    const small = [], ok = [];
+    for (const cl of result) {
+      if (cl.length > 0 && cl.length < MIN_STOPS) small.push(cl);
+      else if (cl.length >= MIN_STOPS) ok.push(cl);
+    }
+
+    if (small.length === 0) break;
+
+    // Edge case: all clusters are small — merge everything if possible
+    if (ok.length === 0) {
+      const all = small.flat();
+      if (all.length <= maxStops) return [all];
+      return result; // can't satisfy both min and max, return as-is
+    }
+
+    // Merge each small cluster into its nearest viable cluster (by centroid)
+    for (const sm of small) {
+      const smLat = sm.reduce((s, p) => s + p.lat, 0) / sm.length;
+      const smLng = sm.reduce((s, p) => s + p.lng, 0) / sm.length;
+      let bestIdx = 0, bestDist = Infinity;
+      for (let i = 0; i < ok.length; i++) {
+        const cLat = ok[i].reduce((s, p) => s + p.lat, 0) / ok[i].length;
+        const cLng = ok[i].reduce((s, p) => s + p.lng, 0) / ok[i].length;
+        const d = distRaw(smLat, smLng, cLat, cLng);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      ok[bestIdx].push(...sm);
+    }
+
+    // Re-split any cluster that now exceeds maxStops
+    result = [];
+    for (const cl of ok) {
+      if (cl.length <= maxStops) { result.push(cl); continue; }
+      const k = Math.ceil(cl.length / maxStops);
+      result.push(...kMeans(cl, k, maxStops));
+    }
+  }
+
+  return result.filter(c => c.length > 0);
+}
+
 // ── Nearest-Neighbour tour ────────────────────────────────────────────
 function nearestNeighbour(oLat, oLng, stops) {
   const pool = [...stops], tour = [];
@@ -525,8 +573,8 @@ function compute() {
 
   if (!stops.length) { renderErr('No valid delivery pincodes found. Please check your input.'); return; }
 
-  // ── Hybrid clustering ────────────────────────────────────────────────
-  const clusters = hybridCluster(stops, oLat, oLng, maxStops);
+  // ── Hybrid clustering + min cluster size enforcement (min 4 stops) ───
+  const clusters = enforceMinClusterSize(hybridCluster(stops, oLat, oLng, maxStops), maxStops);
 
   exportRows = [];
   const toursByCluster = [];
