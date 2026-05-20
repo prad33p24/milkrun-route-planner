@@ -87,6 +87,7 @@
     .mono { font-family: monospace; font-weight: 500; }
     .dim  { color: var(--muted); }
     .hi   { font-weight: 700; color: var(--teal); }
+    .opt { font-size:.75rem; font-weight:400; color:var(--muted); margin-left:3px; }
     .ring-pill { font-size: .7rem; background: #e0f2fe; color: #0369a1; border-radius: 8px; padding: 1px 6px; font-weight: 500; }
     .algo-box { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; font-size: .82rem; color: var(--muted); margin-bottom: 4px; }
     .algo-box strong { color: var(--text); }
@@ -163,6 +164,20 @@
             Include return to origin &mdash; add final leg back to depot in cumulative distance
           </label>
         </div>
+      </div>
+    </div>
+    <div class="row3" style="margin-top:14px;">
+      <div>
+        <label>Vehicle Speed (km/h) <span class="opt">optional</span></label>
+        <input type="number" id="speed" min="1" max="200" placeholder="e.g. 40" />
+      </div>
+      <div>
+        <label>Time at Each Stop (min) <span class="opt">optional</span></label>
+        <input type="number" id="timeAtStop" min="0" placeholder="e.g. 30" />
+      </div>
+      <div>
+        <label>Time at Origin (min) <span class="opt">optional</span></label>
+        <input type="number" id="timeAtOrigin" min="0" placeholder="e.g. 60" />
       </div>
     </div>
     <div class="algo-box">
@@ -571,7 +586,11 @@ function compute() {
   const minStops      = Math.max(1, parseInt(document.getElementById('minStops').value) || 4);
   const maxStops      = Math.max(minStops, parseInt(document.getElementById('maxStops').value) || 10);
   const deviationStops = Math.max(0, parseInt(document.getElementById('deviationStops').value) || 0);
-  const returnToOrig   = document.getElementById('returnToOrigin').checked;
+  const returnToOrig    = document.getElementById('returnToOrigin').checked;
+  const speedKmh       = parseFloat(document.getElementById('speed').value) || 0;
+  const timeAtStopMins = parseFloat(document.getElementById('timeAtStop').value) || 0;
+  const timeAtOrigMins = parseFloat(document.getElementById('timeAtOrigin').value) || 0;
+  const hasTime        = speedKmh > 0 || timeAtStopMins > 0 || timeAtOrigMins > 0;
 
   let inputPins = filePins.length
     ? filePins
@@ -608,6 +627,7 @@ function compute() {
     const tour   = nearestNeighbour(oLat, oLng, clusters[ci]);
     toursByCluster.push(tour);
     let cum = 0;
+    let cumTimeMins = timeAtOrigMins;
     const clusterWeight = tour.reduce((s, t) => s + (t.weight || 0), 0);
     totalWeight += clusterWeight;
 
@@ -627,12 +647,16 @@ function compute() {
 
     const showWeight = tour.some(t => t.weight > 0);
     const showFreq   = tour.some(t => t.freq  > 0);
+    const showTime   = hasTime;
 
     tableHtml += '<div class="tbl-wrap"><table><thead><tr>'
       + '<th>#</th><th>From Pincode</th><th>To Pincode</th>'
       + '<th>Leg (km)</th><th>Cumulative (km)</th>'
       + (showWeight ? '<th>Weight (kg)</th>' : '')
       + (showFreq   ? '<th>Freq/wk</th>'    : '')
+      + (showTime && speedKmh > 0 ? '<th>Travel Time (min)</th>' : '')
+      + (showTime && timeAtStopMins > 0 ? '<th>Service Time (min)</th>' : '')
+      + (showTime   ? '<th>Cumul. Time (hrs)</th>' : '')
       + '</tr></thead><tbody>';
 
     for (let vi = 0; vi < tour.length; vi++) {
@@ -657,9 +681,11 @@ function compute() {
 
     // Return-to-origin leg
     if (returnToOrig && tour.length > 0) {
-      const lastStop = tour[tour.length - 1];
-      const retLeg   = distRoad(lastStop.lat, lastStop.lng, oLat, oLng);
-      cum += retLeg;
+      const lastStop    = tour[tour.length - 1];
+      const retLeg      = distRoad(lastStop.lat, lastStop.lng, oLat, oLng);
+      const retTravelMins = speedKmh > 0 ? (retLeg / speedKmh) * 60 : 0;
+      cum          += retLeg;
+      cumTimeMins  += retTravelMins;
       tableHtml += '<tr style="background:#f0fdfa;">'
         + '<td style="color:var(--muted);">Return</td>'
         + '<td class="mono">' + lastStop.pin + '</td>'
@@ -668,11 +694,17 @@ function compute() {
         + '<td class="hi">'   + cum.toFixed(2) + '</td>'
         + (showWeight ? '<td class="dim">—</td>' : '')
         + (showFreq   ? '<td class="dim">—</td>' : '')
+        + (showTime && speedKmh > 0 ? '<td class="dim">' + retTravelMins.toFixed(0) + '</td>' : '')
+        + (showTime && timeAtStopMins > 0 ? '<td class="dim">—</td>' : '')
+        + (showTime   ? '<td class="hi">'  + (cumTimeMins/60).toFixed(2) + '</td>' : '')
         + '</tr>';
       exportRows.push({
         cluster: 'Cluster '+(ci+1), visit: 'Return', from: lastStop.pin,
         to: originPin, leg: retLeg.toFixed(2), cum: cum.toFixed(2),
-        weight: '', freq: ''
+        weight: '', freq: '',
+        travelMins: speedKmh > 0 ? retTravelMins.toFixed(0) : '',
+        serviceMins: '',
+        cumulTimeHrs: showTime ? (cumTimeMins/60).toFixed(2) : ''
       });
     }
     tableHtml += '</tbody></table></div>';
@@ -683,13 +715,15 @@ function compute() {
     const returnLegKm  = (returnToOrig && tour.length > 0)
       ? distRoad(tour[tour.length-1].lat, tour[tour.length-1].lng, oLat, oLng) : 0;
     const allLegs      = returnToOrig ? [...deliveryLegs, returnLegKm] : deliveryLegs;
+    const totalTATHrs = hasTime ? Math.round(cumTimeMins / 60) : '';
     clusterSummary.push({
       name:        'Cluster ' + (ci+1),
       stops:       tour.length,
       cumDist:     cum.toFixed(2),
       maxLeg:      allLegs.length ? Math.max(...allLegs).toFixed(2) : '0',
       avgLeg:      allLegs.length ? (allLegs.reduce((a,b)=>a+b,0)/allLegs.length).toFixed(2) : '0',
-      totalWeight: clusterWeight || ''
+      totalWeight: clusterWeight || '',
+      totalTATHrs: totalTATHrs
     });
 
     // Patch cumulative into header
@@ -732,18 +766,20 @@ function dlCSV() {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Cluster Summary
-  const sumHeaders = ['Cluster','No. of Stops','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Total Weight (kg)'];
-  const sumRows = clusterSummary.map(s => [s.name, s.stops, +s.cumDist, +s.maxLeg, +s.avgLeg, s.totalWeight !== '' ? +s.totalWeight : '']);
+  const sumHeaders = ['Cluster','No. of Stops','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Total Weight (kg)','Total TAT (hrs)'];
+  const sumRows = clusterSummary.map(s => [s.name, s.stops, +s.cumDist, +s.maxLeg, +s.avgLeg, s.totalWeight !== '' ? +s.totalWeight : '', s.totalTATHrs !== '' ? +s.totalTATHrs : '']);
   const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
-  ws1['!cols'] = [{wch:14},{wch:14},{wch:22},{wch:16},{wch:16},{wch:20}];
+  ws1['!cols'] = [{wch:14},{wch:14},{wch:22},{wch:16},{wch:16},{wch:20},{wch:16}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
 
   // Sheet 2: Route Details
-  const detHeaders = ['Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Weight (kg)','Freq/wk'];
+  const detHeaders = ['Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Weight (kg)','Freq/wk','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
   const detRows = exportRows.map(r => [r.cluster, r.visit, r.from, r.to, +r.leg, +r.cum,
-    r.weight !== '' ? +r.weight : '', r.freq !== '' ? +r.freq : '']);
+    r.weight !== '' ? +r.weight : '', r.freq !== '' ? +r.freq : '',
+    r.travelMins !== '' ? +r.travelMins : '', r.serviceMins !== '' ? +r.serviceMins : '',
+    r.cumulTimeHrs !== '' ? +r.cumulTimeHrs : '']);
   const ws2 = XLSX.utils.aoa_to_sheet([detHeaders, ...detRows]);
-  ws2['!cols'] = [{wch:14},{wch:10},{wch:16},{wch:22},{wch:12},{wch:18},{wch:14},{wch:12}];
+  ws2['!cols'] = [{wch:14},{wch:10},{wch:16},{wch:22},{wch:12},{wch:18},{wch:14},{wch:12},{wch:20},{wch:20},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Route Details');
 
   XLSX.writeFile(wb, 'milkrun_hybrid_output.xlsx');
