@@ -137,15 +137,25 @@
   <!-- Step 2: Config -->
   <div class="card">
     <div class="card-title"><div class="step-num">2</div> Configuration</div>
-    <div class="row2" style="margin-bottom:16px">
+    <div class="row3" style="margin-bottom:16px">
       <div>
         <label>Origin Pincode (depot)</label>
         <input type="text" id="originPin" value="500108" />
       </div>
       <div>
+        <label>Min Stops per Cluster</label>
+        <input type="number" id="minStops" value="4" min="1" max="20" />
+      </div>
+      <div>
         <label>Max Stops per Cluster</label>
         <input type="number" id="maxStops" value="10" min="1" max="50" />
       </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+      <input type="checkbox" id="returnToOrigin" style="width:auto;accent-color:var(--teal);cursor:pointer;" />
+      <label for="returnToOrigin" style="margin:0;cursor:pointer;font-size:.88rem;color:var(--text);">
+        Include return to origin &mdash; add final leg back to depot in cumulative distance
+      </label>
     </div>
     <div class="algo-box">
       <strong>Algorithm:</strong> Stops are first bucketed into <strong>polar rings</strong> from the origin
@@ -432,16 +442,14 @@ function hybridCluster(stops, oLat, oLng, maxStops) {
 }
 
 // ── Minimum cluster size enforcement ─────────────────────────────────
-const MIN_STOPS = 4;
-
-function enforceMinClusterSize(clusters, maxStops) {
+function enforceMinClusterSize(clusters, minStops, maxStops) {
   let result = clusters.map(c => [...c]);
 
   for (let iter = 0; iter < 10; iter++) {
     const small = [], ok = [];
     for (const cl of result) {
-      if (cl.length > 0 && cl.length < MIN_STOPS) small.push(cl);
-      else if (cl.length >= MIN_STOPS) ok.push(cl);
+      if (cl.length > 0 && cl.length < minStops) small.push(cl);
+      else if (cl.length >= minStops) ok.push(cl);
     }
 
     if (small.length === 0) break;
@@ -549,7 +557,9 @@ function renderMap(originPin, toursByCluster) {
 // ── Compute ───────────────────────────────────────────────────────────
 function compute() {
   const originPin = document.getElementById('originPin').value.trim();
-  const maxStops  = Math.max(1, parseInt(document.getElementById('maxStops').value) || 10);
+  const minStops      = Math.max(1, parseInt(document.getElementById('minStops').value) || 4);
+  const maxStops      = Math.max(minStops, parseInt(document.getElementById('maxStops').value) || 10);
+  const returnToOrig  = document.getElementById('returnToOrigin').checked;
 
   let inputPins = filePins.length
     ? filePins
@@ -574,7 +584,7 @@ function compute() {
   if (!stops.length) { renderErr('No valid delivery pincodes found. Please check your input.'); return; }
 
   // ── Hybrid clustering + min cluster size enforcement (min 4 stops) ───
-  const clusters = enforceMinClusterSize(hybridCluster(stops, oLat, oLng, maxStops), maxStops);
+  const clusters = enforceMinClusterSize(hybridCluster(stops, oLat, oLng, maxStops), minStops, maxStops);
 
   exportRows = [];
   const toursByCluster = [];
@@ -632,6 +642,26 @@ function compute() {
       });
     }
 
+    // Return-to-origin leg
+    if (returnToOrig && tour.length > 0) {
+      const lastStop = tour[tour.length - 1];
+      const retLeg   = distRoad(lastStop.lat, lastStop.lng, oLat, oLng);
+      cum += retLeg;
+      tableHtml += '<tr style="background:#f0fdfa;">'
+        + '<td style="color:var(--muted);">&#8617;</td>'
+        + '<td class="mono">' + lastStop.pin + '</td>'
+        + '<td class="mono" style="color:var(--teal);">' + originPin + ' (return)</td>'
+        + '<td class="dim">'  + retLeg.toFixed(2) + '</td>'
+        + '<td class="hi">'   + cum.toFixed(2) + '</td>'
+        + (showWeight ? '<td class="dim">—</td>' : '')
+        + (showFreq   ? '<td class="dim">—</td>' : '')
+        + '</tr>';
+      exportRows.push({
+        cluster: 'Cluster '+(ci+1), visit: '↩ return', from: lastStop.pin,
+        to: originPin + ' (return)', leg: retLeg.toFixed(2), cum: cum.toFixed(2),
+        weight: '', freq: ''
+      });
+    }
     tableHtml += '</tbody></table></div>';
     longestKm = Math.max(longestKm, cum);
 
