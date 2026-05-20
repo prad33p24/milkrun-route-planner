@@ -123,10 +123,10 @@
     </div>
 
     <div class="drop" id="pcDrop">
-      <input type="file" id="pcFile" accept=".csv,.txt" />
+      <input type="file" id="pcFile" accept=".xlsb,.xlsx,.csv,.txt" />
       <div class="drop-icon">&#128203;</div>
       <div class="drop-main">Upload your filled template CSV</div>
-      <div class="drop-hint">Drag &amp; drop or click — origin pincode auto-fills from the file</div>
+      <div class="drop-hint">Drag &amp; drop or click — accepts .xlsb, .xlsx, .csv or .txt</div>
     </div>
     <div class="file-ok" id="pcOk">&#10003; <span id="pcLabel"></span></div>
 
@@ -237,21 +237,23 @@ const RING_LABELS  = ['0–100 km','100–200 km','200–400 km','400–800 km',
 
 // ── Template download ─────────────────────────────────────────────────
 function downloadTemplate() {
+  if (typeof XLSX === 'undefined') { alert('Please wait — library loading'); return; }
   const origin = document.getElementById('originPin').value.trim() || '500108';
-  const rows = [
-    'Origin Pincode,' + origin,
-    'Destination Pincode,Weight (kg),Frequency per week',
-    '515402,150,3',
-    '515408,200,2',
-    '515413,,1',
-    '515401,175,3',
-    '515415,90,',
-  ].join('\n');
-  const blob = new Blob([rows], {type: 'text/csv'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'milkrun_input_template.csv';
-  a.click();
+  const wb = XLSX.utils.book_new();
+  const data = [
+    ['Origin Pincode', origin],
+    [],
+    ['Destination Pincode', 'Weight (kg)', 'Frequency per week'],
+    ['515402', 150, 3],
+    ['515408', 200, 2],
+    ['515413', '', 1],
+    ['515401', 175, 3],
+    ['515415', 90, ''],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:24}, {wch:14}, {wch:22}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Milkrun Input');
+  XLSX.writeFile(wb, 'milkrun_input_template.xlsb', {bookType: 'xlsb'});
 }
 
 // ── File upload ───────────────────────────────────────────────────────
@@ -268,11 +270,12 @@ function downloadTemplate() {
 })();
 
 function loadFile(file) {
-  const reader = new FileReader();
-  reader.onload = e => {
-    const parsed = parseTemplate(e.target.result);
+  const ext      = file.name.split('.').pop().toLowerCase();
+  const isBinary = ['xlsb','xlsx','xls','xlsm'].includes(ext);
+
+  const apply = parsed => {
     if (parsed.origin) document.getElementById('originPin').value = parsed.origin;
-    filePins = parsed.stops;
+    filePins      = parsed.stops;
     hasWeightData = parsed.hasWeight;
     document.getElementById('pcOk').style.display = 'flex';
     document.getElementById('pcLabel').textContent =
@@ -281,7 +284,20 @@ function loadFile(file) {
     document.getElementById('pcArea').value = '';
     checkReady();
   };
-  reader.readAsText(file);
+
+  const reader = new FileReader();
+  if (isBinary) {
+    reader.onload = e => {
+      const wb   = XLSX.read(new Uint8Array(e.target.result), {type: 'array'});
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header: 1, defval: ''});
+      apply(parseTemplateRows(rows));
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload = e => apply(parseTemplate(e.target.result));
+    reader.readAsText(file);
+  }
 }
 
 // ── Parse template CSV ────────────────────────────────────────────────
@@ -306,6 +322,27 @@ function parseTemplate(text) {
     if (!/^[1-9]\d{5}$/.test(pin)) continue;
     const weight = parseFloat(parts[1]) || 0;
     const freq   = parseFloat(parts[2]) || 0;
+    if (weight > 0) hasWeight = true;
+    stops.push({pin, weight, freq});
+  }
+  return {origin, stops, hasWeight};
+}
+
+// ── Parse template from XLSX row array ───────────────────────────────
+function parseTemplateRows(rows) {
+  let origin = null, stops = [], hasWeight = false;
+  for (const row of rows) {
+    const first = String(row[0] || '').trim();
+    if (/origin/i.test(first)) {
+      const val = String(row[1] || '').trim().replace(/\D/g, '');
+      if (/^[1-9]\d{5}$/.test(val)) origin = val;
+      continue;
+    }
+    if (/pincode|destination/i.test(first) || !first) continue;
+    const pin = first.replace(/\D/g, '');
+    if (!/^[1-9]\d{5}$/.test(pin)) continue;
+    const weight = parseFloat(row[1]) || 0;
+    const freq   = parseFloat(row[2]) || 0;
     if (weight > 0) hasWeight = true;
     stops.push({pin, weight, freq});
   }
