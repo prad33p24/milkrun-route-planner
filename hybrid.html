@@ -140,7 +140,7 @@
     <div class="card-title"><div class="step-num">2</div> Configuration</div>
     <div class="row3" style="margin-bottom:16px">
       <div>
-        <label>Origin Pincode (depot)</label>
+        <label id="originLabel">Origin Pincode (depot)</label>
         <input type="text" id="originPin" value="500108" />
       </div>
       <div>
@@ -408,6 +408,8 @@ function parseTemplateRows(rows) {
 // ── Textarea (simple pincode mode) ────────────────────────────────────
 document.getElementById('pcArea').addEventListener('input', () => {
   filePins = [];
+  fileOriginMap = new Map();
+  isMultiOrigin = false;
   hasWeightData = false;
   document.getElementById('pcOk').style.display = 'none';
   checkReady();
@@ -423,9 +425,25 @@ function parsePinsSimple(text) {
 }
 
 function checkReady() {
-  const hasPins = filePins.length > 0 ||
-    parsePinsSimple(document.getElementById('pcArea').value).length > 0;
+  const hasPins = filePins.length > 0
+    || (isMultiOrigin && fileOriginMap.size > 0)
+    || parsePinsSimple(document.getElementById('pcArea').value).length > 0;
   document.getElementById('computeBtn').disabled = !hasPins;
+
+  // Origin field: not required when multi-origin file loaded
+  const originInput = document.getElementById('originPin');
+  const originLabel = document.getElementById('originLabel');
+  if (isMultiOrigin && fileOriginMap.size > 0) {
+    originInput.placeholder = 'Set by uploaded file';
+    originInput.style.background = '#f8fafc';
+    originInput.style.color = 'var(--muted)';
+    if (originLabel) originLabel.textContent = 'Origin Pincode (from template)';
+  } else {
+    originInput.placeholder = '';
+    originInput.style.background = '';
+    originInput.style.color = '';
+    if (originLabel) originLabel.textContent = 'Origin Pincode (depot)';
+  }
 }
 
 // ── Distance helpers ──────────────────────────────────────────────────
