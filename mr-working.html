@@ -148,25 +148,29 @@
         <input type="text" id="originName" placeholder="e.g. Hyd Hub" />
       </div>
       <div>
-        <label>Min Stops per Cluster</label>
-        <input type="number" id="minStops" value="4" min="1" max="20" />
-      </div>
-    </div>
-    <div class="row3" style="margin-bottom:16px">
-      <div>
-        <label>Max Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(raw count)</span></label>
-        <input type="number" id="maxPins" value="10" min="1" max="50" />
-      </div>
-      <div>
-        <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
-        <input type="number" id="maxDrops" value="6" min="1" max="50" step="0.5" />
-      </div>
-      <div>
         <label>Min Shipments/Year to Include</label>
         <input type="number" id="minShipmentsPerYear" value="12" min="0" placeholder="0 = no filter" />
       </div>
     </div>
     <div class="row3" style="margin-bottom:16px">
+      <div>
+        <label>Min Pincodes per Cluster</label>
+        <input type="number" id="minStops" value="4" min="1" max="20" />
+      </div>
+      <div>
+        <label>Min Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
+        <input type="number" id="minDrops" value="4" min="0" max="20" step="0.5" />
+      </div>
+      <div>
+        <label>Max Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(hard cap)</span></label>
+        <input type="number" id="maxPins" value="10" min="1" max="50" />
+      </div>
+    </div>
+    <div class="row3" style="margin-bottom:16px">
+      <div>
+        <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
+        <input type="number" id="maxDrops" value="6" min="1" max="50" step="0.5" />
+      </div>
       <div>
         <label>Min Weight/Trip — Short Haul &#8804;1000 km (kg)</label>
         <input type="number" id="minWeightShortHaul" value="1000" min="0" />
@@ -175,6 +179,8 @@
         <label>Min Weight/Trip — Long Haul &gt;1000 km (kg)</label>
         <input type="number" id="minWeightLongHaul" value="1500" min="0" />
       </div>
+    </div>
+    <div class="row2" style="margin-bottom:16px">
       <div>
         <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(extra stops allowed when merging small clusters)</span></label>
         <input type="number" id="deviationStops" value="1" min="0" max="10" />
@@ -205,9 +211,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings</strong> from the origin, then <strong>K-Means</strong> clusters within each bucket.
-      Clusters iterate until both caps hold: <strong>Max Pincodes</strong> (raw count) &amp; <strong>Max Drops</strong> (&#8721; slot-weights, where slot&nbsp;weight&nbsp;=&nbsp;min(shipments/156,&nbsp;1)).
-      Post-clustering, clusters below the weight/trip threshold are <strong>merged</strong> into the nearest neighbour; clusters above 800 kg but below threshold are <strong>flagged</strong>.
+      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings</strong> with <strong>dynamic sectors</strong> (sector count scales with stop density per ring so each bucket targets &#8804;&nbsp;Max&nbsp;Drops stops). <strong>K-Means</strong> refines within each bucket. Small clusters (below Min&nbsp;Pincodes <em>or</em> Min&nbsp;Drops) are merged into their nearest neighbour. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -614,10 +618,24 @@ function kMeans(stops, k, maxDrops, maxPins) {
 
 // ── Hybrid clustering ─────────────────────────────────────────────────
 function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
-  // Step 1: polar bucketing
+  // Step 1: dynamic polar bucketing — sector count scales with stop density per ring
+  const ringCounts = new Array(RING_KM.length).fill(0);
+  for (const stop of stops) ringCounts[getRing(distRaw(oLat, oLng, stop.lat, stop.lng))]++;
+  const target = Math.max(1, Math.min(maxDrops, maxPins));
+  const dynSectors = ringCounts.map(count => {
+    if (count <= target) return 4;
+    let s = 4;
+    while (count / s > target) s *= 2;
+    return s;
+  });
+
   const buckets = new Map();
   for (const stop of stops) {
-    const key = getPolarKey(stop, oLat, oLng);
+    const km   = distRaw(oLat, oLng, stop.lat, stop.lng);
+    const ring = getRing(km);
+    const nSec = dynSectors[ring];
+    const b    = bearing(oLat, oLng, stop.lat, stop.lng);
+    const key  = ring + '_' + Math.floor(b / (360 / nSec));
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(stop);
   }
@@ -655,15 +673,25 @@ function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
 }
 
 // ── Minimum cluster size enforcement ─────────────────────────────────
-function enforceMinClusterSize(clusters, minStops, maxDrops, maxPins, deviationStops) {
+function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops) {
   deviationStops = deviationStops || 0;
+
+  function isSmall(cl) {
+    if (cl.length < minStops) return true;
+    if (minDrops > 0) {
+      const drops = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+      if (drops < minDrops) return true;
+    }
+    return false;
+  }
+
   let result = clusters.map(c => [...c]);
 
   for (let iter = 0; iter < 10; iter++) {
     const small = [], ok = [];
     for (const cl of result) {
-      if (cl.length > 0 && cl.length < minStops) small.push(cl);
-      else if (cl.length >= minStops) ok.push(cl);
+      if (cl.length > 0 && isSmall(cl)) small.push(cl);
+      else if (cl.length > 0) ok.push(cl);
     }
 
     if (small.length === 0) break;
@@ -802,7 +830,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
   const clusters = enforceMinClusterSize(
     hybridCluster(rawStops, oLat, oLng, cfg.maxDrops, cfg.maxPins),
-    cfg.minStops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops
+    cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops
   );
 
   const hasWeightData = rawStops.some(s => s.weight > 0);
@@ -995,7 +1023,8 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 // ── Compute ───────────────────────────────────────────────────────────
 function compute() {
   const minStops           = Math.max(1, parseInt(document.getElementById('minStops').value)||4);
-  const maxPins            = Math.max(minStops, parseInt(document.getElementById('maxPins').value)||15);
+  const minDrops           = Math.max(0, parseFloat(document.getElementById('minDrops').value)||0);
+  const maxPins            = Math.max(minStops, parseInt(document.getElementById('maxPins').value)||10);
   const maxDrops           = Math.max(1, parseFloat(document.getElementById('maxDrops').value)||10);
   const minShipmentsPerYear = Math.max(0, parseInt(document.getElementById('minShipmentsPerYear').value)||0);
   const minWeightShortHaul  = Math.max(0, parseFloat(document.getElementById('minWeightShortHaul').value)||0);
@@ -1020,7 +1049,7 @@ function compute() {
     originGroups = new Map([[oPin, pins]]);
   }
 
-  const cfg = {minStops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
+  const cfg = {minStops, minDrops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
     timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
     minShipmentsPerYear, minWeightShortHaul, minWeightLongHaul};
 
