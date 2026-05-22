@@ -144,19 +144,43 @@
         <input type="text" id="originPin" value="500108" />
       </div>
       <div>
+        <label>Origin Name <span class="opt">optional</span></label>
+        <input type="text" id="originName" placeholder="e.g. Hyd Hub" />
+      </div>
+      <div>
         <label>Min Stops per Cluster</label>
         <input type="number" id="minStops" value="4" min="1" max="20" />
       </div>
+    </div>
+    <div class="row3" style="margin-bottom:16px">
       <div>
-        <label>Max Stops per Cluster</label>
-        <input type="number" id="maxStops" value="10" min="1" max="50" />
+        <label>Max Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(raw count)</span></label>
+        <input type="number" id="maxPins" value="15" min="1" max="50" />
+      </div>
+      <div>
+        <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
+        <input type="number" id="maxDrops" value="10" min="1" max="50" step="0.5" />
+      </div>
+      <div>
+        <label>Min Shipments/Year to Include</label>
+        <input type="number" id="minShipmentsPerYear" value="12" min="0" placeholder="0 = no filter" />
       </div>
     </div>
-    <div class="row2" style="margin-top:14px;margin-bottom:4px;">
+    <div class="row3" style="margin-bottom:16px">
       <div>
-        <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(max extra stops allowed when merging small clusters)</span></label>
+        <label>Min Weight/Trip — Short Haul &#8804;1000 km (kg)</label>
+        <input type="number" id="minWeightShortHaul" value="1000" min="0" />
+      </div>
+      <div>
+        <label>Min Weight/Trip — Long Haul &gt;1000 km (kg)</label>
+        <input type="number" id="minWeightLongHaul" value="1500" min="0" />
+      </div>
+      <div>
+        <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(extra stops allowed when merging small clusters)</span></label>
         <input type="number" id="deviationStops" value="1" min="0" max="10" />
       </div>
+    </div>
+    <div class="row2" style="margin-top:4px;margin-bottom:4px;">
       <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
         <div style="display:flex;align-items:center;gap:10px;">
           <input type="checkbox" id="returnToOrigin" style="width:auto;accent-color:var(--teal);cursor:pointer;" />
@@ -181,10 +205,9 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Stops are first bucketed into <strong>polar rings</strong> from the origin
-      (0–100 km &#8594; 4 sectors &nbsp;|&nbsp; 100–200 km &#8594; 8 &nbsp;|&nbsp; 200–400 km &#8594; 12 &nbsp;|&nbsp;
-      400–800 km &#8594; 16 &nbsp;|&nbsp; 800 km+ &#8594; 20), then
-      <strong>K-Means</strong> refines clusters within each bucket. Oversized clusters iterate until all &#8804; max stops.
+      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings</strong> from the origin, then <strong>K-Means</strong> clusters within each bucket.
+      Clusters iterate until both caps hold: <strong>Max Pincodes</strong> (raw count) &amp; <strong>Max Drops</strong> (&#8721; slot-weights, where slot&nbsp;weight&nbsp;=&nbsp;min(shipments/156,&nbsp;1)).
+      Post-clustering, clusters below the weight/trip threshold are <strong>merged</strong> into the nearest neighbour; clusters above 800 kg but below threshold are <strong>flagged</strong>.
     </div>
   </div>
 
@@ -218,8 +241,9 @@ const GEO_RAW = {"500108":[17.2407,78.4329],"503321":[18.4703,77.8024],"515001":
 const geoMap = new Map(Object.entries(GEO_RAW).map(([k,[a,b]]) => [k, {lat:a, lng:b}]));
 
 // ── State ─────────────────────────────────────────────────────────────
-let filePins      = [];          // [{pin, weight, freq}] — single-origin mode
+let filePins      = [];          // [{pin, weight, shipmentsPerYear}] — single-origin mode
 let fileOriginMap = new Map();   // Map<originPin, stops[]> — multi-origin mode
+let originNameMap = new Map();   // Map<originPin, originName>
 let isMultiOrigin = false;
 let exportRows    = [];
 let clusterSummary = [];
@@ -241,17 +265,18 @@ const RING_LABELS  = ['0–100 km','100–200 km','200–400 km','400–800 km',
 function downloadTemplate() {
   if (typeof XLSX === 'undefined') { alert('Please wait — library loading'); return; }
   const origin = document.getElementById('originPin').value.trim() || '500108';
+  const oName  = document.getElementById('originName').value.trim() || 'Hub1';
   const wb = XLSX.utils.book_new();
   const data = [
-    ['Origin Pincode', 'Destination Pincode', 'Weight (kg)', 'Frequency per week'],
-    [origin, '515402', 150, 3],
-    [origin, '515408', 200, 2],
-    [origin, '515413', '', 1],
-    ['503321', '515201', 100, 1],
-    ['503321', '515211', 75, 2],
+    ['Origin Name', 'Origin Pincode', 'Destination Pincode', 'Avg Weight per Shipment (kg)', 'Shipments per Year'],
+    [oName,    origin,   '515402', 150, 200],
+    [oName,    origin,   '515408', 200, 100],
+    [oName,    origin,   '515413', 120,  52],
+    ['Hub2', '503321', '515201', 100,  30],
+    ['Hub2', '503321', '515211',  75,  78],
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:18}, {wch:22}, {wch:14}, {wch:22}];
+  ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}, {wch:30}, {wch:22}];
   XLSX.utils.book_append_sheet(wb, ws, 'Milkrun Input');
   XLSX.writeFile(wb, 'milkrun_input_template.xlsb', {bookType: 'xlsb'});
 }
@@ -275,6 +300,7 @@ function loadFile(file) {
 
   const apply = parsed => {
     hasWeightData = parsed.hasWeight;
+    originNameMap = parsed.originNameMap || new Map();
     if (parsed.isMulti) {
       isMultiOrigin = true;
       fileOriginMap = parsed.originMap;
@@ -317,10 +343,31 @@ function loadFile(file) {
 // ── Parse template CSV ────────────────────────────────────────────────
 function parseTemplate(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l);
-  if (!lines.length) return {isMulti: false, origin: null, stops: [], hasWeight: false};
+  if (!lines.length) return {isMulti: false, origin: null, stops: [], hasWeight: false, originNameMap: new Map()};
 
-  // Detect multi-origin CSV: first header has Origin + Destination
   const h = lines[0].split(',').map(c => c.trim().toLowerCase());
+
+  // New 5-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year
+  if (/name/i.test(h[0]) && /origin.*pin|^origin$/i.test(h[1])) {
+    const originMap = new Map(), nameMap = new Map();
+    let hasWeight = false;
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(',');
+      const origName = (parts[0] || '').trim();
+      const origPin  = (parts[1] || '').trim().replace(/\D/g, '');
+      const destPin  = (parts[2] || '').trim().replace(/\D/g, '');
+      if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
+      const weight           = parseFloat(parts[3]) || 0;
+      const shipmentsPerYear = parseFloat(parts[4]) || 0;
+      if (weight > 0) hasWeight = true;
+      if (origName) nameMap.set(origPin, origName);
+      if (!originMap.has(origPin)) originMap.set(origPin, []);
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
+    }
+    return {isMulti: true, originMap, originNameMap: nameMap, hasWeight};
+  }
+
+  // Old 4-col format (backward compat): Origin Pincode | Dest Pincode | Weight | Freq/wk
   if (/origin/i.test(h[0]) && /dest|pincode/i.test(h[1])) {
     const originMap = new Map();
     let hasWeight = false;
@@ -329,13 +376,13 @@ function parseTemplate(text) {
       const origPin = parts[0].trim().replace(/\D/g, '');
       const destPin = parts[1].trim().replace(/\D/g, '');
       if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
-      const weight = parseFloat(parts[2]) || 0;
-      const freq   = parseFloat(parts[3]) || 0;
+      const weight           = parseFloat(parts[2]) || 0;
+      const shipmentsPerYear = (parseFloat(parts[3]) || 0) * 52;
       if (weight > 0) hasWeight = true;
       if (!originMap.has(origPin)) originMap.set(origPin, []);
-      originMap.get(origPin).push({pin: destPin, weight, freq});
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
     }
-    return {isMulti: true, originMap, hasWeight};
+    return {isMulti: true, originMap, originNameMap: new Map(), hasWeight};
   }
 
   // Single-origin (old format)
@@ -351,24 +398,43 @@ function parseTemplate(text) {
     if (/pincode/i.test(first) || /destination/i.test(first)) continue;
     const pin = first.replace(/\D/g, '');
     if (!/^[1-9]\d{5}$/.test(pin)) continue;
-    const weight = parseFloat(parts[1]) || 0;
-    const freq   = parseFloat(parts[2]) || 0;
+    const weight           = parseFloat(parts[1]) || 0;
+    const shipmentsPerYear = (parseFloat(parts[2]) || 0) * 52;
     if (weight > 0) hasWeight = true;
-    stops.push({pin, weight, freq});
+    stops.push({pin, weight, shipmentsPerYear});
   }
-  return {isMulti: false, origin, stops, hasWeight};
+  return {isMulti: false, origin, stops, hasWeight, originNameMap: new Map()};
 }
 
 // ── Parse template from XLSX row array ───────────────────────────────
 function parseTemplateRows(rows) {
-  if (!rows.length) return {isMulti: false, origin: null, stops: [], hasWeight: false};
+  if (!rows.length) return {isMulti: false, origin: null, stops: [], hasWeight: false, originNameMap: new Map()};
 
-  // Detect multi-origin: header row has Origin + Destination columns
   const h0 = String(rows[0][0] || '').trim().toLowerCase();
   const h1 = String(rows[0][1] || '').trim().toLowerCase();
-  const isMultiFormat = /origin/i.test(h0) && (/dest|pincode/i.test(h1));
 
-  if (isMultiFormat) {
+  // New 5-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year
+  if (/name/i.test(h0) && /origin.*pin|^origin$/i.test(h1)) {
+    const originMap = new Map(), nameMap = new Map();
+    let hasWeight = false;
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const origName = String(row[0] || '').trim();
+      const origPin  = String(row[1] || '').trim().replace(/\D/g, '');
+      const destPin  = String(row[2] || '').trim().replace(/\D/g, '');
+      if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
+      const weight           = parseFloat(row[3]) || 0;
+      const shipmentsPerYear = parseFloat(row[4]) || 0;
+      if (weight > 0) hasWeight = true;
+      if (origName) nameMap.set(origPin, origName);
+      if (!originMap.has(origPin)) originMap.set(origPin, []);
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
+    }
+    return {isMulti: true, originMap, originNameMap: nameMap, hasWeight};
+  }
+
+  // Old 4-col format (backward compat): Origin Pincode | Dest Pincode | Weight | Freq/wk
+  if (/origin/i.test(h0) && /dest|pincode/i.test(h1)) {
     const originMap = new Map();
     let hasWeight = false;
     for (let i = 1; i < rows.length; i++) {
@@ -376,13 +442,13 @@ function parseTemplateRows(rows) {
       const origPin = String(row[0] || '').trim().replace(/\D/g, '');
       const destPin = String(row[1] || '').trim().replace(/\D/g, '');
       if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
-      const weight = parseFloat(row[2]) || 0;
-      const freq   = parseFloat(row[3]) || 0;
+      const weight           = parseFloat(row[2]) || 0;
+      const shipmentsPerYear = (parseFloat(row[3]) || 0) * 52;
       if (weight > 0) hasWeight = true;
       if (!originMap.has(origPin)) originMap.set(origPin, []);
-      originMap.get(origPin).push({pin: destPin, weight, freq});
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
     }
-    return {isMulti: true, originMap, hasWeight};
+    return {isMulti: true, originMap, originNameMap: new Map(), hasWeight};
   }
 
   // Single-origin (old format): detect origin row + data rows
@@ -397,18 +463,19 @@ function parseTemplateRows(rows) {
     if (/pincode|destination/i.test(first) || !first) continue;
     const pin = first.replace(/\D/g, '');
     if (!/^[1-9]\d{5}$/.test(pin)) continue;
-    const weight = parseFloat(row[1]) || 0;
-    const freq   = parseFloat(row[2]) || 0;
+    const weight           = parseFloat(row[1]) || 0;
+    const shipmentsPerYear = (parseFloat(row[2]) || 0) * 52;
     if (weight > 0) hasWeight = true;
-    stops.push({pin, weight, freq});
+    stops.push({pin, weight, shipmentsPerYear});
   }
-  return {isMulti: false, origin, stops, hasWeight};
+  return {isMulti: false, origin, stops, hasWeight, originNameMap: new Map()};
 }
 
 // ── Textarea (simple pincode mode) ────────────────────────────────────
 document.getElementById('pcArea').addEventListener('input', () => {
   filePins = [];
   fileOriginMap = new Map();
+  originNameMap = new Map();
   isMultiOrigin = false;
   hasWeightData = false;
   document.getElementById('pcOk').style.display = 'none';
@@ -419,7 +486,7 @@ function parsePinsSimple(text) {
   const seen = new Set(), pins = [];
   for (const tok of text.split(/[\s,;|\t\r\n]+/)) {
     const s = tok.trim().replace(/\D/g, '');
-    if (/^[1-9]\d{5}$/.test(s) && !seen.has(s)) { seen.add(s); pins.push({pin:s, weight:0, freq:0}); }
+    if (/^[1-9]\d{5}$/.test(s) && !seen.has(s)) { seen.add(s); pins.push({pin:s, weight:0, shipmentsPerYear:0}); }
   }
   return pins;
 }
@@ -481,8 +548,16 @@ function getPolarKey(stop, oLat, oLng) {
   return ring + '_' + sector;
 }
 
+// ── Dual-cap helper ───────────────────────────────────────────────────
+const TRIPS_PER_YEAR = 156; // 6-day week, alternate-day dispatch
+
+function clExceedsCap(cl, maxDrops, maxPins) {
+  if (cl.length > maxPins) return true;
+  return cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0) > maxDrops;
+}
+
 // ── K-Means++ ─────────────────────────────────────────────────────────
-function kMeans(stops, k, maxStops) {
+function kMeans(stops, k, maxDrops, maxPins) {
   if (stops.length <= k) return stops.map(s => [s]);
   k = Math.min(k, stops.length);
 
@@ -521,7 +596,7 @@ function kMeans(stops, k, maxStops) {
       if (pts.length > 0) centroids[ci] = {
         lat: pts.reduce((s,p) => s+p.lat, 0) / pts.length,
         lng: pts.reduce((s,p) => s+p.lng, 0) / pts.length,
-        pin: '', weight: 0, freq: 0
+        pin: '', weight: 0, shipmentsPerYear: 0, slotWeight: 1
       };
     }
   }
@@ -531,14 +606,14 @@ function kMeans(stops, k, maxStops) {
   const result = [];
   for (const cl of raw) {
     if (!cl.length) continue;
-    if (cl.length <= maxStops) { result.push(cl); continue; }
-    for (let i = 0; i < cl.length; i += maxStops) result.push(cl.slice(i, i+maxStops));
+    if (!clExceedsCap(cl, maxDrops, maxPins)) { result.push(cl); continue; }
+    for (let i = 0; i < cl.length; i += maxPins) result.push(cl.slice(i, i+maxPins));
   }
   return result;
 }
 
 // ── Hybrid clustering ─────────────────────────────────────────────────
-function hybridCluster(stops, oLat, oLng, maxStops) {
+function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
   // Step 1: polar bucketing
   const buckets = new Map();
   for (const stop of stops) {
@@ -551,9 +626,10 @@ function hybridCluster(stops, oLat, oLng, maxStops) {
   let clusters = [];
   for (const bucket of buckets.values()) {
     if (!bucket.length) continue;
-    if (bucket.length <= maxStops) { clusters.push(bucket); continue; }
-    const k = Math.ceil(bucket.length / maxStops);
-    clusters.push(...kMeans(bucket, k, maxStops));
+    if (!clExceedsCap(bucket, maxDrops, maxPins)) { clusters.push(bucket); continue; }
+    const slotSum = bucket.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+    const k = Math.max(Math.ceil(bucket.length / maxPins), Math.ceil(slotSum / maxDrops));
+    clusters.push(...kMeans(bucket, k, maxDrops, maxPins));
   }
 
   // Step 3: iterate — split any still-oversized cluster
@@ -562,9 +638,10 @@ function hybridCluster(stops, oLat, oLng, maxStops) {
     changed = false;
     const next = [];
     for (const cl of clusters) {
-      if (cl.length > maxStops) {
-        const k = Math.ceil(cl.length / maxStops);
-        next.push(...kMeans(cl, k, maxStops));
+      if (clExceedsCap(cl, maxDrops, maxPins)) {
+        const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+        const k = Math.max(Math.ceil(cl.length / maxPins), Math.ceil(slotSum / maxDrops));
+        next.push(...kMeans(cl, k, maxDrops, maxPins));
         changed = true;
       } else {
         next.push(cl);
@@ -578,7 +655,7 @@ function hybridCluster(stops, oLat, oLng, maxStops) {
 }
 
 // ── Minimum cluster size enforcement ─────────────────────────────────
-function enforceMinClusterSize(clusters, minStops, maxStops, deviationStops) {
+function enforceMinClusterSize(clusters, minStops, maxDrops, maxPins, deviationStops) {
   deviationStops = deviationStops || 0;
   let result = clusters.map(c => [...c]);
 
@@ -594,8 +671,8 @@ function enforceMinClusterSize(clusters, minStops, maxStops, deviationStops) {
     // Edge case: all clusters are small — merge everything if possible
     if (ok.length === 0) {
       const all = small.flat();
-      if (all.length <= maxStops) return [all];
-      return result; // can't satisfy both min and max, return as-is
+      if (!clExceedsCap(all, maxDrops, maxPins)) return [all];
+      return result;
     }
 
     // Merge each small cluster into its nearest viable cluster (by centroid)
@@ -612,12 +689,13 @@ function enforceMinClusterSize(clusters, minStops, maxStops, deviationStops) {
       ok[bestIdx].push(...sm);
     }
 
-    // Re-split only if cluster exceeds maxStops + deviationStops (deviation is exception budget)
+    // Re-split if merged cluster exceeds caps (deviation applies to raw count only)
     result = [];
     for (const cl of ok) {
-      if (cl.length <= maxStops + deviationStops) { result.push(cl); continue; }
-      const k = Math.ceil(cl.length / maxStops);
-      result.push(...kMeans(cl, k, maxStops));
+      if (!clExceedsCap(cl, maxDrops, maxPins + deviationStops)) { result.push(cl); continue; }
+      const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+      const k = Math.max(Math.ceil(cl.length / maxPins), Math.ceil(slotSum / maxDrops));
+      result.push(...kMeans(cl, k, maxDrops, maxPins));
     }
   }
 
@@ -656,31 +734,32 @@ function renderMap(originGroups) {
   let globalCi = 0;
 
   for (const grp of originGroups) {
-    const {originPin, oLat, oLng, toursByCluster} = grp;
+    const {originPin, originName, oLat, oLng, toursByCluster, clusterLabels} = grp;
     bounds.push([oLat, oLng]);
 
     L.marker([oLat, oLng], {
       icon: L.divIcon({
         className: '',
-        html: '<div style="background:#1e293b;color:#fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)" title="Origin: ' + originPin + '">&#127981;</div>',
+        html: '<div style="background:#1e293b;color:#fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)" title="Origin: ' + (originName||originPin) + '">&#127981;</div>',
         iconSize: [34,34], iconAnchor: [17,17]
       })
-    }).bindPopup('<b>Origin / Depot</b><br>Pincode: ' + originPin).addTo(leafletMap);
+    }).bindPopup('<b>Origin / Depot</b><br>' + (originName&&originName!==originPin?'Name: '+originName+'<br>':'') + 'Pincode: ' + originPin).addTo(leafletMap);
 
     for (let ci = 0; ci < toursByCluster.length; ci++) {
       const color = COLORS[globalCi % COLORS.length];
       const tour  = toursByCluster[ci];
+      const label = (clusterLabels && clusterLabels[ci]) || ('Cluster ' + (ci+1));
       const line  = [[oLat, oLng]];
 
       for (let vi = 0; vi < tour.length; vi++) {
-        const {pin, lat, lng, weight, freq} = tour[vi];
+        const {pin, lat, lng, weight, shipmentsPerYear, slotWeight} = tour[vi];
         line.push([lat, lng]);
         bounds.push([lat, lng]);
-        let popup = '<b>Cluster ' + (ci+1) + ' &middot; Stop ' + (vi+1) + '</b><br>'
-          + (originGroups.length > 1 ? 'Origin: ' + originPin + '<br>' : '')
+        let popup = '<b>' + label + ' &middot; Stop ' + (vi+1) + '</b><br>'
+          + (originGroups.length > 1 ? 'Origin: ' + (originName||originPin) + '<br>' : '')
           + 'Pincode: ' + pin;
-        if (weight > 0) popup += '<br>Weight: ' + weight + ' kg';
-        if (freq  > 0) popup += '<br>Frequency: ' + freq + '/wk';
+        if (weight > 0) popup += '<br>Avg Wt: ' + weight + ' kg';
+        if (shipmentsPerYear > 0) popup += '<br>Ship/Yr: ' + shipmentsPerYear + ' &nbsp; Slot: ' + (slotWeight||1).toFixed(2);
         L.marker([lat, lng], {
           icon: L.divIcon({
             className: '',
@@ -690,7 +769,7 @@ function renderMap(originGroups) {
         }).bindPopup(popup).addTo(leafletMap);
       }
       L.polyline(line, {color, weight: 3, opacity: 0.8}).addTo(leafletMap);
-      legendHtml += '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>C' + (ci+1) + (originGroups.length > 1 ? '(' + originPin + ')' : '') + '</span>';
+      legendHtml += '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>' + label + '</span>';
       globalCi++;
     }
   }
@@ -701,63 +780,130 @@ function renderMap(originGroups) {
 
 // ── Per-origin processing ────────────────────────────────────────────
 function processOrigin(originPin, inputPins, cfg, colorOffset) {
-  const {oLat, oLng} = {oLat: geoMap.get(originPin).lat, oLng: geoMap.get(originPin).lng};
-  const notFound = [], stops = [];
+  const originName = (originNameMap.get(originPin) || '').trim() || originPin;
+  const safeName   = originName.replace(/[^A-Za-z0-9]/g, '_');
+  const {lat: oLat, lng: oLng} = geoMap.get(originPin);
+  const notFound = [], rawStops = [];
   const seen = new Set([originPin]);
+
   for (const p of inputPins) {
     if (seen.has(p.pin)) continue;
     seen.add(p.pin);
     if (!geoMap.has(p.pin)) { notFound.push(p.pin); continue; }
+    const shipmentsPerYear = p.shipmentsPerYear || 0;
+    // Filter: skip pincodes below minimum annual shipments (only when data is present)
+    if (cfg.minShipmentsPerYear > 0 && shipmentsPerYear > 0 && shipmentsPerYear < cfg.minShipmentsPerYear) continue;
     const {lat, lng} = geoMap.get(p.pin);
-    stops.push({pin: p.pin, lat, lng, weight: p.weight||0, freq: p.freq||0});
+    const slotWeight = shipmentsPerYear > 0 ? Math.min(shipmentsPerYear / TRIPS_PER_YEAR, 1.0) : 1.0;
+    rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight});
   }
 
-  if (!stops.length) return {tableHtml:'', toursByCluster:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
+  if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
-  const clusters = enforceMinClusterSize(hybridCluster(stops, oLat, oLng, cfg.maxStops), cfg.minStops, cfg.maxStops, cfg.deviationStops);
+  const clusters = enforceMinClusterSize(
+    hybridCluster(rawStops, oLat, oLng, cfg.maxDrops, cfg.maxPins),
+    cfg.minStops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops
+  );
+
+  const hasWeightData = rawStops.some(s => s.weight > 0);
+  const hasFreqData   = rawStops.some(s => s.shipmentsPerYear > 0);
+
+  // Build initial tour data for viability check
+  let tourData = clusters.map(cl => {
+    const tour = nearestNeighbour(oLat, oLng, cl);
+    let cumKm = 0;
+    for (const t of tour) cumKm += t.leg;
+    const weightPerTrip = hasWeightData
+      ? cl.reduce((s, st) => s + st.weight * st.slotWeight, 0) : 0;
+    const threshold = cumKm <= 1000 ? cfg.minWeightShortHaul : cfg.minWeightLongHaul;
+    return {cl, tour, cumKm, weightPerTrip, threshold, flag: ''};
+  });
+
+  // Viability check: merge under-floor clusters, flag between-floor-and-threshold
+  const WEIGHT_FLOOR = 800;
+  if (hasWeightData && (cfg.minWeightShortHaul > 0 || cfg.minWeightLongHaul > 0)) {
+    const viable = [], underFloor = [];
+    for (const td of tourData) {
+      if (td.weightPerTrip < WEIGHT_FLOOR) {
+        underFloor.push(td);
+      } else {
+        td.flag = td.weightPerTrip < td.threshold ? 'under-utilised' : '';
+        viable.push(td);
+      }
+    }
+    for (const uf of underFloor) {
+      if (!viable.length) { uf.flag = 'under-utilised'; viable.push(uf); continue; }
+      const ufLat = uf.cl.reduce((s,p) => s+p.lat, 0) / uf.cl.length;
+      const ufLng = uf.cl.reduce((s,p) => s+p.lng, 0) / uf.cl.length;
+      let bestIdx = 0, bestDist = Infinity;
+      for (let i = 0; i < viable.length; i++) {
+        const cLat = viable[i].cl.reduce((s,p) => s+p.lat, 0) / viable[i].cl.length;
+        const cLng = viable[i].cl.reduce((s,p) => s+p.lng, 0) / viable[i].cl.length;
+        const d = distRaw(ufLat, ufLng, cLat, cLng);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      }
+      viable[bestIdx].cl.push(...uf.cl);
+      const newTour = nearestNeighbour(oLat, oLng, viable[bestIdx].cl);
+      let newCumKm = 0;
+      for (const t of newTour) newCumKm += t.leg;
+      const newWPT   = viable[bestIdx].cl.reduce((s, st) => s + st.weight * st.slotWeight, 0);
+      const newThresh = newCumKm <= 1000 ? cfg.minWeightShortHaul : cfg.minWeightLongHaul;
+      viable[bestIdx].tour    = newTour;
+      viable[bestIdx].cumKm   = newCumKm;
+      viable[bestIdx].weightPerTrip = newWPT;
+      viable[bestIdx].threshold     = newThresh;
+      viable[bestIdx].flag = newWPT < newThresh ? 'under-utilised' : '';
+    }
+    tourData = viable;
+  }
+
   const {speedKmh, timeAtStopMins, timeAtOrigMins, hasTime, returnToOrig} = cfg;
-  const showWeight = stops.some(s => s.weight > 0);
-  const showFreq   = stops.some(s => s.freq > 0);
-  const showTime   = hasTime;
+  const showWeight = hasWeightData;
+  const showFreq   = hasFreqData;
 
   let tableHtml = '', longestKm = 0, totalWeight = 0;
-  const toursByCluster = [], summaryRows = [], detailRows = [];
+  const toursByCluster = [], clusterLabels = [], summaryRows = [], detailRows = [];
 
-  for (let ci = 0; ci < clusters.length; ci++) {
-    const globalCi = colorOffset + ci;
-    const color    = COLORS[globalCi % COLORS.length];
-    const tour     = nearestNeighbour(oLat, oLng, clusters[ci]);
+  for (let ci = 0; ci < tourData.length; ci++) {
+    const {cl, tour, weightPerTrip, flag} = tourData[ci];
+    const globalCi    = colorOffset + ci;
+    const color       = COLORS[globalCi % COLORS.length];
+    const clusterLabel = safeName + '_' + (ci+1);
     toursByCluster.push(tour);
+    clusterLabels.push(clusterLabel);
+
     let cum = 0, cumTimeMins = timeAtOrigMins;
-    const clusterWeight = tour.reduce((s,t) => s+(t.weight||0), 0);
-    totalWeight += clusterWeight;
+    const clusterRawWt  = tour.reduce((s,t) => s+(t.weight||0), 0);
+    const clusterSlotSum = cl.reduce((s,st) => s+(st.slotWeight||1), 0);
+    totalWeight += clusterRawWt;
 
     const ringIdxes    = tour.map(t => getRing(distRaw(oLat,oLng,t.lat,t.lng)));
     const dominantRing = ringIdxes.sort((a,b) => ringIdxes.filter(r=>r===b).length - ringIdxes.filter(r=>r===a).length)[0];
-    const clusterLabel = 'Cluster ' + (ci+1);
 
     tableHtml += '<div class="cl-header">'
       + '<span class="cl-badge" style="background:' + color + '">' + clusterLabel + '</span>'
       + (cfg.multiOrigin ? '<span class="ring-pill" style="background:#e0e7ff;color:#3730a3;">&#128204; ' + originPin + '</span>' : '')
-      + '<span>' + tour.length + ' stop' + (tour.length!==1?'s':'') + '</span>'
+      + '<span>' + cl.length + ' pincode' + (cl.length!==1?'s':'') + '</span>'
+      + (showFreq ? '<span class="ring-pill" style="background:#f0fdf4;color:#15803d;">&#9889; ' + clusterSlotSum.toFixed(1) + ' avg drops/trip</span>' : '')
       + '<span class="ring-pill">' + RING_LABELS[dominantRing] + '</span>'
       + '<span class="cl-meta">'
-      + (clusterWeight>0 ? '<span>&#9992; '+clusterWeight.toLocaleString()+' kg</span>' : '')
+      + (showWeight && weightPerTrip>0 ? '<span>&#9992; '+Math.round(weightPerTrip).toLocaleString()+' kg/trip</span>' : (clusterRawWt>0 ? '<span>&#9992; '+clusterRawWt.toLocaleString()+' kg</span>' : ''))
       + '<span id="clkm'+globalCi+'"></span>'
+      + (flag ? '<span style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;border-radius:6px;padding:1px 8px;font-size:.75rem;margin-left:4px;">&#9888; Under-utilised</span>' : '')
       + '</span></div>';
 
     tableHtml += '<div class="tbl-wrap"><table><thead><tr>'
       + '<th>#</th><th>From Pincode</th><th>To Pincode</th>'
       + '<th>Leg (km)</th><th>Cumulative (km)</th>'
-      + (showWeight ? '<th>Weight (kg)</th>' : '')
-      + (showFreq   ? '<th>Freq/wk</th>'    : '')
-      + (showTime && speedKmh>0 ? '<th>Travel Time (min)</th>' : '')
-      + (showTime && timeAtStopMins>0 ? '<th>Service Time (min)</th>' : '')
-      + (showTime   ? '<th>Cumul. Time (hrs)</th>' : '')
+      + (showWeight ? '<th>Avg Wt (kg)</th>' : '')
+      + (showFreq   ? '<th>Ship/Yr</th><th>Slot Wt</th>' : '')
+      + (hasTime && speedKmh>0 ? '<th>Travel Time (min)</th>' : '')
+      + (hasTime && timeAtStopMins>0 ? '<th>Service Time (min)</th>' : '')
+      + (hasTime   ? '<th>Cumul. Time (hrs)</th>' : '')
       + '</tr></thead><tbody>';
 
     for (let vi = 0; vi < tour.length; vi++) {
-      const {pin, leg, weight, freq} = tour[vi];
+      const {pin, leg, weight, shipmentsPerYear, slotWeight} = tour[vi];
       cum += leg;
       const travelMins = speedKmh>0 ? (leg/speedKmh)*60 : 0;
       cumTimeMins += travelMins + timeAtStopMins;
@@ -769,15 +915,17 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td class="dim">'+leg.toFixed(2)+'</td>'
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">'+(weight>0?weight:'—')+'</td>' : '')
-        + (showFreq   ? '<td class="dim">'+(freq>0?freq:'—')+'</td>'   : '')
-        + (showTime && speedKmh>0 ? '<td class="dim">'+travelMins.toFixed(0)+'</td>' : '')
-        + (showTime && timeAtStopMins>0 ? '<td class="dim">'+timeAtStopMins+'</td>' : '')
-        + (showTime ? '<td class="dim">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
+        + (showFreq   ? '<td class="dim">'+(shipmentsPerYear>0?shipmentsPerYear:'—')+'</td><td class="dim">'+(shipmentsPerYear>0?slotWeight.toFixed(2):'—')+'</td>' : '')
+        + (hasTime && speedKmh>0 ? '<td class="dim">'+travelMins.toFixed(0)+'</td>' : '')
+        + (hasTime && timeAtStopMins>0 ? '<td class="dim">'+timeAtStopMins+'</td>' : '')
+        + (hasTime ? '<td class="dim">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
         + '</tr>';
       detailRows.push({origin:originPin, cluster:clusterLabel, visit:vi+1, from, to:pin,
-        leg:leg.toFixed(2), cum:cum.toFixed(2), weight:weight||'', freq:freq||'',
+        leg:leg.toFixed(2), cum:cum.toFixed(2),
+        weight:weight||'', shipmentsPerYear:shipmentsPerYear||'',
+        slotWeight: shipmentsPerYear>0 ? slotWeight.toFixed(2) : '',
         travelMins:speedKmh>0?travelMins.toFixed(0):'', serviceMins:timeAtStopMins||'',
-        cumulTimeHrs:showTime?(cumTimeMins/60).toFixed(2):''});
+        cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):''});
     }
 
     if (returnToOrig && tour.length>0) {
@@ -792,15 +940,15 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td class="dim">'+retLeg.toFixed(2)+'</td>'
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">—</td>' : '')
-        + (showFreq   ? '<td class="dim">—</td>' : '')
-        + (showTime && speedKmh>0 ? '<td class="dim">'+retMins.toFixed(0)+'</td>' : '')
-        + (showTime && timeAtStopMins>0 ? '<td class="dim">—</td>' : '')
-        + (showTime ? '<td class="hi">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
+        + (showFreq   ? '<td class="dim">—</td><td class="dim">—</td>' : '')
+        + (hasTime && speedKmh>0 ? '<td class="dim">'+retMins.toFixed(0)+'</td>' : '')
+        + (hasTime && timeAtStopMins>0 ? '<td class="dim">—</td>' : '')
+        + (hasTime ? '<td class="hi">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
         + '</tr>';
       detailRows.push({origin:originPin, cluster:clusterLabel, visit:'Return', from:last.pin, to:originPin,
-        leg:retLeg.toFixed(2), cum:cum.toFixed(2), weight:'', freq:'',
+        leg:retLeg.toFixed(2), cum:cum.toFixed(2), weight:'', shipmentsPerYear:'', slotWeight:'',
         travelMins:speedKmh>0?retMins.toFixed(0):'', serviceMins:'',
-        cumulTimeHrs:showTime?(cumTimeMins/60).toFixed(2):''});
+        cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):''});
     }
 
     tableHtml += '</tbody></table></div>';
@@ -810,43 +958,57 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     const retKm = returnToOrig && tour.length>0 ? distRoad(tour[tour.length-1].lat,tour[tour.length-1].lng,oLat,oLng) : 0;
     const allLegs = returnToOrig ? [...delivLegs, retKm] : delivLegs;
     const totalTATHrs = hasTime ? Math.round(cumTimeMins/60) : '';
-    summaryRows.push({origin:originPin, name:clusterLabel, stops:tour.length,
-      cumDist:cum.toFixed(2), maxLeg:allLegs.length?Math.max(...allLegs).toFixed(2):'0',
-      avgLeg:allLegs.length?(allLegs.reduce((a,b)=>a+b,0)/allLegs.length).toFixed(2):'0',
-      totalWeight:clusterWeight||'', totalTATHrs});
+    summaryRows.push({
+      origin: originPin, originName, name: clusterLabel,
+      stops: cl.length,
+      avgDropsPerTrip: showFreq ? clusterSlotSum.toFixed(1) : '',
+      cumDist: cum.toFixed(2),
+      maxLeg: allLegs.length ? Math.max(...allLegs).toFixed(2) : '0',
+      avgLeg: allLegs.length ? (allLegs.reduce((a,b)=>a+b,0)/allLegs.length).toFixed(2) : '0',
+      totalWeight: clusterRawWt||'',
+      avgWeightPerTrip: showWeight && weightPerTrip>0 ? Math.round(weightPerTrip) : '',
+      totalTATHrs, flag
+    });
 
     tableHtml = tableHtml.replace('id="clkm'+globalCi+'"',
       'id="clkm'+globalCi+'">&#128345; '+cum.toFixed(1)+' km</span><span');
   }
 
-  return {tableHtml, toursByCluster, summaryRows, detailRows, notFound,
-    stopCount:stops.length, longestKm, totalWeight, oLat, oLng, clusterCount:clusters.length};
+  return {tableHtml, toursByCluster, clusterLabels, summaryRows, detailRows, notFound,
+    stopCount: rawStops.length, longestKm, totalWeight, oLat, oLng, clusterCount: tourData.length};
 }
 
 // ── Compute ───────────────────────────────────────────────────────────
 function compute() {
-  const minStops      = Math.max(1, parseInt(document.getElementById('minStops').value)||4);
-  const maxStops      = Math.max(minStops, parseInt(document.getElementById('maxStops').value)||10);
-  const deviationStops = Math.max(0, parseInt(document.getElementById('deviationStops').value)||0);
-  const returnToOrig  = document.getElementById('returnToOrigin').checked;
-  const speedKmh      = parseFloat(document.getElementById('speed').value)||0;
-  const timeAtStopMins = parseFloat(document.getElementById('timeAtStop').value)||0;
-  const timeAtOrigMins = parseFloat(document.getElementById('timeAtOrigin').value)||0;
-  const hasTime       = speedKmh>0 || timeAtStopMins>0 || timeAtOrigMins>0;
+  const minStops           = Math.max(1, parseInt(document.getElementById('minStops').value)||4);
+  const maxPins            = Math.max(minStops, parseInt(document.getElementById('maxPins').value)||15);
+  const maxDrops           = Math.max(1, parseFloat(document.getElementById('maxDrops').value)||10);
+  const minShipmentsPerYear = Math.max(0, parseInt(document.getElementById('minShipmentsPerYear').value)||0);
+  const minWeightShortHaul  = Math.max(0, parseFloat(document.getElementById('minWeightShortHaul').value)||0);
+  const minWeightLongHaul   = Math.max(0, parseFloat(document.getElementById('minWeightLongHaul').value)||0);
+  const deviationStops     = Math.max(0, parseInt(document.getElementById('deviationStops').value)||0);
+  const returnToOrig       = document.getElementById('returnToOrigin').checked;
+  const speedKmh           = parseFloat(document.getElementById('speed').value)||0;
+  const timeAtStopMins     = parseFloat(document.getElementById('timeAtStop').value)||0;
+  const timeAtOrigMins     = parseFloat(document.getElementById('timeAtOrigin').value)||0;
+  const hasTime            = speedKmh>0 || timeAtStopMins>0 || timeAtOrigMins>0;
 
   // Build origin→destinations map
   let originGroups;
   if (isMultiOrigin && fileOriginMap.size>0) {
     originGroups = fileOriginMap;
   } else {
-    const oPin = document.getElementById('originPin').value.trim();
-    const pins = filePins.length ? filePins : parsePinsSimple(document.getElementById('pcArea').value);
+    const oPin  = document.getElementById('originPin').value.trim();
+    const oName = document.getElementById('originName').value.trim();
+    const pins  = filePins.length ? filePins : parsePinsSimple(document.getElementById('pcArea').value);
     if (!oPin) { renderErr('Please enter an origin pincode.'); return; }
+    if (oName) originNameMap.set(oPin, oName);
     originGroups = new Map([[oPin, pins]]);
   }
 
-  const cfg = {minStops, maxStops, deviationStops, returnToOrig, speedKmh,
-    timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1};
+  const cfg = {minStops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
+    timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
+    minShipmentsPerYear, minWeightShortHaul, minWeightLongHaul};
 
   exportRows = []; clusterSummary = [];
   let allTableHtml = '', allTourGroups = [], allNotFound = [];
@@ -857,14 +1019,15 @@ function compute() {
     if (!destPins.length) continue;
 
     if (originGroups.size > 1) {
-      allTableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:var(--teal-lt);border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:var(--teal);">&#128204; Origin: ' + originPin + '</div>';
+      const oLabel = (originNameMap.get(originPin)||'') ? originNameMap.get(originPin) + ' (' + originPin + ')' : originPin;
+      allTableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:var(--teal-lt);border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:var(--teal);">&#128204; Origin: ' + oLabel + '</div>';
     }
 
     const r = processOrigin(originPin, destPins, cfg, colorOffset);
     allTableHtml     += r.tableHtml;
     exportRows.push(...r.detailRows);
     clusterSummary.push(...r.summaryRows);
-    allTourGroups.push({originPin, oLat:r.oLat, oLng:r.oLng, toursByCluster:r.toursByCluster});
+    allTourGroups.push({originPin, originName: originNameMap.get(originPin)||originPin, oLat:r.oLat, oLng:r.oLng, toursByCluster:r.toursByCluster, clusterLabels:r.clusterLabels});
     allNotFound.push(...r.notFound);
     totalClusters += r.clusterCount;
     totalStops    += r.stopCount;
@@ -903,20 +1066,33 @@ function dlCSV() {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Cluster Summary
-  const sumHeaders = ['Origin','Cluster','No. of Stops','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Total Weight (kg)','Total TAT (hrs)'];
-  const sumRows = clusterSummary.map(s => [s.origin, s.name, s.stops, +s.cumDist, +s.maxLeg, +s.avgLeg, s.totalWeight!==''?+s.totalWeight:'', s.totalTATHrs!==''?+s.totalTATHrs:'']);
+  const sumHeaders = ['Origin Pincode','Origin Name','Cluster','Max Pincodes','Avg Drops/Trip','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Total Weight (kg)','Avg Weight/Trip (kg)','Total TAT (hrs)','Status'];
+  const sumRows = clusterSummary.map(s => [
+    s.origin, s.originName||'', s.name, s.stops,
+    s.avgDropsPerTrip!==''?+s.avgDropsPerTrip:'',
+    +s.cumDist, +s.maxLeg, +s.avgLeg,
+    s.totalWeight!==''?+s.totalWeight:'',
+    s.avgWeightPerTrip!==''?+s.avgWeightPerTrip:'',
+    s.totalTATHrs!==''?+s.totalTATHrs:'',
+    s.flag||''
+  ]);
   const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
-  ws1['!cols'] = [{wch:12},{wch:14},{wch:14},{wch:22},{wch:16},{wch:16},{wch:20},{wch:16}];
+  ws1['!cols'] = [{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:20},{wch:22},{wch:16},{wch:16}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
 
   // Sheet 2: Route Details
-  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Weight (kg)','Freq/wk','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
-  const detRows = exportRows.map(r => [r.origin, r.cluster, r.visit, r.from, r.to, +r.leg, +r.cum,
-    r.weight!==''?+r.weight:'', r.freq!==''?+r.freq:'',
-    r.travelMins!==''?+r.travelMins:'', r.serviceMins!==''?+r.serviceMins:'',
-    r.cumulTimeHrs!==''?+r.cumulTimeHrs:'']);
+  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Avg Weight/Shipment (kg)','Shipments/Year','Slot Weight','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
+  const detRows = exportRows.map(r => [
+    r.origin, r.cluster, r.visit, r.from, r.to, +r.leg, +r.cum,
+    r.weight!==''?+r.weight:'',
+    r.shipmentsPerYear!==''?+r.shipmentsPerYear:'',
+    r.slotWeight!==''?+r.slotWeight:'',
+    r.travelMins!==''?+r.travelMins:'',
+    r.serviceMins!==''?+r.serviceMins:'',
+    r.cumulTimeHrs!==''?+r.cumulTimeHrs:''
+  ]);
   const ws2 = XLSX.utils.aoa_to_sheet([detHeaders, ...detRows]);
-  ws2['!cols'] = [{wch:12},{wch:14},{wch:10},{wch:16},{wch:22},{wch:12},{wch:18},{wch:14},{wch:12},{wch:20},{wch:20},{wch:18}];
+  ws2['!cols'] = [{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:20},{wch:20},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Route Details');
 
   XLSX.writeFile(wb, 'milkrun_hybrid_output.xlsx');
