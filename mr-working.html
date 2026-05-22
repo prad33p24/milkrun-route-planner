@@ -258,7 +258,7 @@ const COLORS = [
 
 // ── Ring configuration ────────────────────────────────────────────────
 const RING_KM      = [100, 200, 400, 800, Infinity];
-const RING_SECTORS = [4, 8, 12, 16, 20];
+const RING_SECTORS = [8, 12, 16, 20, 24];
 const RING_LABELS  = ['0–100 km','100–200 km','200–400 km','400–800 km','800 km+'];
 
 // ── Template download ─────────────────────────────────────────────────
@@ -831,30 +831,37 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         viable.push(td);
       }
     }
+    const flagged = [];
     for (const uf of underFloor) {
-      if (!viable.length) { uf.flag = 'under-utilised'; viable.push(uf); continue; }
+      // Only merge into clusters that are GENUINELY viable (above weight floor)
+      // — never merge under-floor clusters into each other
+      const mergeTargets = viable.filter(v => v.weightPerTrip >= WEIGHT_FLOOR);
+      // Also skip merge if it would push the target over the pincode hard cap
+      const fitsIn = mergeTargets.filter(v => v.cl.length + uf.cl.length <= cfg.maxPins);
+      if (!fitsIn.length) { uf.flag = 'under-utilised'; flagged.push(uf); continue; }
       const ufLat = uf.cl.reduce((s,p) => s+p.lat, 0) / uf.cl.length;
       const ufLng = uf.cl.reduce((s,p) => s+p.lng, 0) / uf.cl.length;
       let bestIdx = 0, bestDist = Infinity;
-      for (let i = 0; i < viable.length; i++) {
-        const cLat = viable[i].cl.reduce((s,p) => s+p.lat, 0) / viable[i].cl.length;
-        const cLng = viable[i].cl.reduce((s,p) => s+p.lng, 0) / viable[i].cl.length;
+      for (let i = 0; i < fitsIn.length; i++) {
+        const cLat = fitsIn[i].cl.reduce((s,p) => s+p.lat, 0) / fitsIn[i].cl.length;
+        const cLng = fitsIn[i].cl.reduce((s,p) => s+p.lng, 0) / fitsIn[i].cl.length;
         const d = distRaw(ufLat, ufLng, cLat, cLng);
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
-      viable[bestIdx].cl.push(...uf.cl);
-      const newTour = nearestNeighbour(oLat, oLng, viable[bestIdx].cl);
+      const target = fitsIn[bestIdx];
+      target.cl.push(...uf.cl);
+      const newTour = nearestNeighbour(oLat, oLng, target.cl);
       let newCumKm = 0;
       for (const t of newTour) newCumKm += t.leg;
-      const newWPT   = viable[bestIdx].cl.reduce((s, st) => s + st.weight * st.slotWeight, 0);
+      const newWPT    = target.cl.reduce((s, st) => s + st.weight * st.slotWeight, 0);
       const newThresh = newCumKm <= 1000 ? cfg.minWeightShortHaul : cfg.minWeightLongHaul;
-      viable[bestIdx].tour    = newTour;
-      viable[bestIdx].cumKm   = newCumKm;
-      viable[bestIdx].weightPerTrip = newWPT;
-      viable[bestIdx].threshold     = newThresh;
-      viable[bestIdx].flag = newWPT < newThresh ? 'under-utilised' : '';
+      target.tour          = newTour;
+      target.cumKm         = newCumKm;
+      target.weightPerTrip = newWPT;
+      target.threshold     = newThresh;
+      target.flag          = newWPT < newThresh ? 'under-utilised' : '';
     }
-    tourData = viable;
+    tourData = [...viable, ...flagged];
   }
 
   const {speedKmh, timeAtStopMins, timeAtOrigMins, hasTime, returnToOrig} = cfg;
