@@ -155,7 +155,7 @@
     <div class="row3" style="margin-bottom:16px">
       <div>
         <label>Max Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(raw count)</span></label>
-        <input type="number" id="maxPins" value="15" min="1" max="50" />
+        <input type="number" id="maxPins" value="10" min="1" max="50" />
       </div>
       <div>
         <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
@@ -692,7 +692,7 @@ function enforceMinClusterSize(clusters, minStops, maxDrops, maxPins, deviationS
     // Re-split if merged cluster exceeds caps (deviation applies to raw count only)
     result = [];
     for (const cl of ok) {
-      if (!clExceedsCap(cl, maxDrops, maxPins + deviationStops)) { result.push(cl); continue; }
+      if (!clExceedsCap(cl, maxDrops + deviationStops, maxPins)) { result.push(cl); continue; }
       const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
       const k = Math.max(Math.ceil(cl.length / maxPins), Math.ceil(slotSum / maxDrops));
       result.push(...kMeans(cl, k, maxDrops, maxPins));
