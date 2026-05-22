@@ -172,11 +172,15 @@
         <input type="number" id="maxDrops" value="6" min="1" max="50" step="0.5" />
       </div>
       <div>
-        <label>Min Weight/Trip — Short Haul &#8804;1000 km (kg)</label>
-        <input type="number" id="minWeightShortHaul" value="1000" min="0" />
+        <label>Min Weight/Trip &#8804;500 km (kg)</label>
+        <input type="number" id="minWeightShortHaul" value="750" min="0" />
       </div>
       <div>
-        <label>Min Weight/Trip — Long Haul &gt;1000 km (kg)</label>
+        <label>Min Weight/Trip &#8804;1000 km (kg)</label>
+        <input type="number" id="minWeightMidHaul" value="1000" min="0" />
+      </div>
+      <div>
+        <label>Min Weight/Trip &gt;1000 km (kg)</label>
         <input type="number" id="minWeightLongHaul" value="1500" min="0" />
       </div>
     </div>
@@ -873,8 +877,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     // Filter: skip pincodes below minimum annual shipments (only when data is present)
     if (cfg.minShipmentsPerYear > 0 && shipmentsPerYear > 0 && shipmentsPerYear < cfg.minShipmentsPerYear) continue;
     const {lat, lng} = geoMap.get(p.pin);
-    const slotWeight = shipmentsPerYear > 0 ? Math.min(shipmentsPerYear / TRIPS_PER_YEAR, 1.0) : 1.0;
-    rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight});
+    rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
   }
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
@@ -888,72 +891,88 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng
   );
 
+  // Recompute slot weights using cluster-specific avg trips/year
+  // (removes the global 156-trips assumption; same factor for all pincodes within a cluster)
+  for (const cl of clusters) {
+    const tripsData = cl.filter(st => st.shipmentsPerYear > 0);
+    if (!tripsData.length) continue;
+    const clAvgTrips = tripsData.reduce((s, st) => s + st.shipmentsPerYear, 0) / tripsData.length;
+    for (const stop of cl) {
+      stop.slotWeight = stop.shipmentsPerYear > 0
+        ? Math.min(stop.shipmentsPerYear / clAvgTrips, 1.0)
+        : 1.0;
+    }
+  }
+
   const hasWeightData = rawStops.some(s => s.weight > 0);
   const hasFreqData   = rawStops.some(s => s.shipmentsPerYear > 0);
 
-  // Build initial tour data for viability check
+  function weightThreshold(cumKm, cfg) {
+    if (cumKm <= 500)  return cfg.minWeightShortHaul;
+    if (cumKm <= 1000) return cfg.minWeightMidHaul;
+    return cfg.minWeightLongHaul;
+  }
+
+  // Build tour data (uses freshly recomputed per-cluster slot weights)
   let tourData = clusters.map(cl => {
     const tour = nearestNeighbour(oLat, oLng, cl);
     let cumKm = 0;
     for (const t of tour) cumKm += t.leg;
     const weightPerTrip = hasWeightData
       ? cl.reduce((s, st) => s + st.weight * st.slotWeight, 0) : 0;
-    const threshold = cumKm <= 1000 ? cfg.minWeightShortHaul : cfg.minWeightLongHaul;
+    const threshold = weightThreshold(cumKm, cfg);
     return {cl, tour, cumKm, weightPerTrip, threshold, flag: ''};
   });
 
-  // Viability check: merge under-floor clusters, flag between-floor-and-threshold
-  const WEIGHT_FLOOR = 800;
-  if (hasWeightData && (cfg.minWeightShortHaul > 0 || cfg.minWeightLongHaul > 0)) {
+  // Viability check — three-tier: ≤500km/750kg, ≤1000km/1000kg, >1000km/1500kg
+  const anyThreshold = cfg.minWeightShortHaul > 0 || cfg.minWeightMidHaul > 0 || cfg.minWeightLongHaul > 0;
+  if (hasWeightData && anyThreshold) {
     const viable = [], underFloor = [];
     for (const td of tourData) {
-      if (td.weightPerTrip < WEIGHT_FLOOR) {
-        underFloor.push(td);
-      } else {
-        td.flag = td.weightPerTrip < td.threshold ? 'under-utilised' : '';
-        viable.push(td);
-      }
+      const floor = weightThreshold(td.cumKm, cfg);
+      if (td.weightPerTrip < floor) underFloor.push(td);
+      else { td.flag = ''; viable.push(td); }
     }
     const flagged = [];
-    for (const uf of underFloor) {
-      // Only merge into clusters that are GENUINELY viable (above weight floor)
-      // — never merge under-floor clusters into each other
-      const ufLat = uf.cl.reduce((s,p) => s+p.lat, 0) / uf.cl.length;
-      const ufLng = uf.cl.reduce((s,p) => s+p.lng, 0) / uf.cl.length;
-      const ufB   = bearing(oLat, oLng, ufLat, ufLng);
-      function vBearing(v) {
-        const lat = v.cl.reduce((s,p)=>s+p.lat,0)/v.cl.length;
-        const lng = v.cl.reduce((s,p)=>s+p.lng,0)/v.cl.length;
-        return bearing(oLat, oLng, lat, lng);
-      }
-      function vAngDiff(a, b) { return Math.abs(((a-b+540)%360)-180); }
+    function clCentB(cl) {
+      const lat = cl.reduce((s,p)=>s+p.lat,0)/cl.length;
+      const lng = cl.reduce((s,p)=>s+p.lng,0)/cl.length;
+      return bearing(oLat, oLng, lat, lng);
+    }
+    function angD(a, b) { return Math.abs(((a-b+540)%360)-180); }
 
-      // Only merge into truly-viable, same-direction, non-overflowing targets
+    for (const uf of underFloor) {
+      const ufB = clCentB(uf.cl);
       const fitsIn = viable.filter(v =>
-        v.weightPerTrip >= WEIGHT_FLOOR &&
+        v.weightPerTrip >= weightThreshold(v.cumKm, cfg) &&
         v.cl.length + uf.cl.length <= cfg.maxPins &&
-        vAngDiff(ufB, vBearing(v)) <= 90
+        angD(ufB, clCentB(v.cl)) <= 90
       );
       if (!fitsIn.length) { uf.flag = 'under-utilised'; flagged.push(uf); continue; }
+      const ufLat = uf.cl.reduce((s,p)=>s+p.lat,0)/uf.cl.length;
+      const ufLng = uf.cl.reduce((s,p)=>s+p.lng,0)/uf.cl.length;
       let bestIdx = 0, bestDist = Infinity;
       for (let i = 0; i < fitsIn.length; i++) {
-        const cLat = fitsIn[i].cl.reduce((s,p) => s+p.lat, 0) / fitsIn[i].cl.length;
-        const cLng = fitsIn[i].cl.reduce((s,p) => s+p.lng, 0) / fitsIn[i].cl.length;
-        const d = distRaw(ufLat, ufLng, cLat, cLng);
+        const d = distRaw(ufLat, ufLng,
+          fitsIn[i].cl.reduce((s,p)=>s+p.lat,0)/fitsIn[i].cl.length,
+          fitsIn[i].cl.reduce((s,p)=>s+p.lng,0)/fitsIn[i].cl.length);
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
       const target = fitsIn[bestIdx];
       target.cl.push(...uf.cl);
+      // Recompute cluster-avg slot weights for merged cluster
+      const td2 = target.cl.filter(st => st.shipmentsPerYear > 0);
+      if (td2.length) {
+        const avg2 = td2.reduce((s,st)=>s+st.shipmentsPerYear,0)/td2.length;
+        for (const st of target.cl) st.slotWeight = st.shipmentsPerYear>0 ? Math.min(st.shipmentsPerYear/avg2,1):1;
+      }
       const newTour = nearestNeighbour(oLat, oLng, target.cl);
-      let newCumKm = 0;
-      for (const t of newTour) newCumKm += t.leg;
-      const newWPT    = target.cl.reduce((s, st) => s + st.weight * st.slotWeight, 0);
-      const newThresh = newCumKm <= 1000 ? cfg.minWeightShortHaul : cfg.minWeightLongHaul;
-      target.tour          = newTour;
-      target.cumKm         = newCumKm;
+      let newCumKm = 0; for (const t of newTour) newCumKm += t.leg;
+      const newWPT = target.cl.reduce((s,st)=>s+st.weight*st.slotWeight,0);
+      target.tour = newTour; target.cumKm = newCumKm;
       target.weightPerTrip = newWPT;
-      target.threshold     = newThresh;
-      target.flag          = newWPT < newThresh ? 'under-utilised' : '';
+      target.threshold = weightThreshold(newCumKm, cfg);
+      target.flag = newWPT < target.threshold ? 'under-utilised' : '';
     }
     tourData = [...viable, ...flagged];
   }
@@ -1094,6 +1113,7 @@ function compute() {
   const maxDrops           = Math.max(1, parseFloat(document.getElementById('maxDrops').value)||10);
   const minShipmentsPerYear = Math.max(0, parseInt(document.getElementById('minShipmentsPerYear').value)||0);
   const minWeightShortHaul  = Math.max(0, parseFloat(document.getElementById('minWeightShortHaul').value)||0);
+  const minWeightMidHaul    = Math.max(0, parseFloat(document.getElementById('minWeightMidHaul').value)||0);
   const minWeightLongHaul   = Math.max(0, parseFloat(document.getElementById('minWeightLongHaul').value)||0);
   const deviationStops     = Math.max(0, parseInt(document.getElementById('deviationStops').value)||0);
   const returnToOrig       = document.getElementById('returnToOrigin').checked;
@@ -1117,7 +1137,7 @@ function compute() {
 
   const cfg = {minStops, minDrops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
     timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
-    minShipmentsPerYear, minWeightShortHaul, minWeightLongHaul};
+    minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul};
 
   exportRows = []; clusterSummary = [];
   let allTableHtml = '', allTourGroups = [], allNotFound = [];
