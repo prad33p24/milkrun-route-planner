@@ -716,9 +716,31 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
     if (small.length === 0) break;
 
     if (ok.length === 0) {
-      const all = small.flat();
-      if (all.length <= maxPins) return [all];
-      return result;
+      // All clusters are small — group by bearing instead of merging blindly.
+      // Sort by bearing from origin, then chain-merge adjacent clusters within ±90°.
+      const byB = small
+        .map(cl => {
+          const lat = cl.reduce((s,p) => s+p.lat,0)/cl.length;
+          const lng = cl.reduce((s,p) => s+p.lng,0)/cl.length;
+          return {cl, b: bearing(oLat, oLng, lat, lng)};
+        })
+        .sort((a, b) => a.b - b.b);
+
+      let current = [...byB[0].cl];
+      const grouped = [];
+      for (let i = 1; i < byB.length; i++) {
+        const cLat = current.reduce((s,p)=>s+p.lat,0)/current.length;
+        const cLng = current.reduce((s,p)=>s+p.lng,0)/current.length;
+        const cB   = bearing(oLat, oLng, cLat, cLng);
+        if (angularDiff(cB, byB[i].b) <= 90 && current.length + byB[i].cl.length <= maxPins) {
+          current.push(...byB[i].cl);
+        } else {
+          grouped.push(current);
+          current = [...byB[i].cl];
+        }
+      }
+      grouped.push(current);
+      return grouped.filter(c => c.length > 0);
     }
 
     for (const sm of small) {
@@ -896,12 +918,23 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     for (const uf of underFloor) {
       // Only merge into clusters that are GENUINELY viable (above weight floor)
       // — never merge under-floor clusters into each other
-      const mergeTargets = viable.filter(v => v.weightPerTrip >= WEIGHT_FLOOR);
-      // Also skip merge if it would push the target over the pincode hard cap
-      const fitsIn = mergeTargets.filter(v => v.cl.length + uf.cl.length <= cfg.maxPins);
-      if (!fitsIn.length) { uf.flag = 'under-utilised'; flagged.push(uf); continue; }
       const ufLat = uf.cl.reduce((s,p) => s+p.lat, 0) / uf.cl.length;
       const ufLng = uf.cl.reduce((s,p) => s+p.lng, 0) / uf.cl.length;
+      const ufB   = bearing(oLat, oLng, ufLat, ufLng);
+      function vBearing(v) {
+        const lat = v.cl.reduce((s,p)=>s+p.lat,0)/v.cl.length;
+        const lng = v.cl.reduce((s,p)=>s+p.lng,0)/v.cl.length;
+        return bearing(oLat, oLng, lat, lng);
+      }
+      function vAngDiff(a, b) { return Math.abs(((a-b+540)%360)-180); }
+
+      // Only merge into truly-viable, same-direction, non-overflowing targets
+      const fitsIn = viable.filter(v =>
+        v.weightPerTrip >= WEIGHT_FLOOR &&
+        v.cl.length + uf.cl.length <= cfg.maxPins &&
+        vAngDiff(ufB, vBearing(v)) <= 90
+      );
+      if (!fitsIn.length) { uf.flag = 'under-utilised'; flagged.push(uf); continue; }
       let bestIdx = 0, bestDist = Infinity;
       for (let i = 0; i < fitsIn.length; i++) {
         const cLat = fitsIn[i].cl.reduce((s,p) => s+p.lat, 0) / fitsIn[i].cl.length;
