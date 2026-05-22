@@ -897,14 +897,17 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       + '<th>Leg (km)</th><th>Cumulative (km)</th>'
       + (showWeight ? '<th>Avg Wt (kg)</th>' : '')
       + (showFreq   ? '<th>Ship/Yr</th><th>Slot Wt</th>' : '')
+      + (showWeight ? '<th>Cumul. Wt/Trip (kg)</th>' : '')
       + (hasTime && speedKmh>0 ? '<th>Travel Time (min)</th>' : '')
       + (hasTime && timeAtStopMins>0 ? '<th>Service Time (min)</th>' : '')
       + (hasTime   ? '<th>Cumul. Time (hrs)</th>' : '')
       + '</tr></thead><tbody>';
 
+    let cumWt = 0;
     for (let vi = 0; vi < tour.length; vi++) {
       const {pin, leg, weight, shipmentsPerYear, slotWeight} = tour[vi];
       cum += leg;
+      cumWt += weight * slotWeight;
       const travelMins = speedKmh>0 ? (leg/speedKmh)*60 : 0;
       cumTimeMins += travelMins + timeAtStopMins;
       const from = vi===0 ? originPin : tour[vi-1].pin;
@@ -916,6 +919,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">'+(weight>0?weight:'—')+'</td>' : '')
         + (showFreq   ? '<td class="dim">'+(shipmentsPerYear>0?shipmentsPerYear:'—')+'</td><td class="dim">'+(shipmentsPerYear>0?slotWeight.toFixed(2):'—')+'</td>' : '')
+        + (showWeight ? '<td class="hi">'+(cumWt>0?Math.round(cumWt).toLocaleString():'—')+'</td>' : '')
         + (hasTime && speedKmh>0 ? '<td class="dim">'+travelMins.toFixed(0)+'</td>' : '')
         + (hasTime && timeAtStopMins>0 ? '<td class="dim">'+timeAtStopMins+'</td>' : '')
         + (hasTime ? '<td class="dim">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
@@ -924,6 +928,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         leg:leg.toFixed(2), cum:cum.toFixed(2),
         weight:weight||'', shipmentsPerYear:shipmentsPerYear||'',
         slotWeight: shipmentsPerYear>0 ? slotWeight.toFixed(2) : '',
+        cumWt: showWeight ? Math.round(cumWt) : '',
         travelMins:speedKmh>0?travelMins.toFixed(0):'', serviceMins:timeAtStopMins||'',
         cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):''});
     }
@@ -941,12 +946,14 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">—</td>' : '')
         + (showFreq   ? '<td class="dim">—</td><td class="dim">—</td>' : '')
+        + (showWeight ? '<td class="hi">'+(cumWt>0?Math.round(cumWt).toLocaleString():'—')+'</td>' : '')
         + (hasTime && speedKmh>0 ? '<td class="dim">'+retMins.toFixed(0)+'</td>' : '')
         + (hasTime && timeAtStopMins>0 ? '<td class="dim">—</td>' : '')
         + (hasTime ? '<td class="hi">'+(cumTimeMins/60).toFixed(2)+'</td>' : '')
         + '</tr>';
       detailRows.push({origin:originPin, cluster:clusterLabel, visit:'Return', from:last.pin, to:originPin,
         leg:retLeg.toFixed(2), cum:cum.toFixed(2), weight:'', shipmentsPerYear:'', slotWeight:'',
+        cumWt: showWeight ? Math.round(cumWt) : '',
         travelMins:speedKmh>0?retMins.toFixed(0):'', serviceMins:'',
         cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):''});
     }
@@ -1081,18 +1088,19 @@ function dlCSV() {
   XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
 
   // Sheet 2: Route Details
-  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Avg Weight/Shipment (kg)','Shipments/Year','Slot Weight','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
+  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Avg Weight/Shipment (kg)','Shipments/Year','Slot Weight','Cumul. Wt/Trip (kg)','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
   const detRows = exportRows.map(r => [
     r.origin, r.cluster, r.visit, r.from, r.to, +r.leg, +r.cum,
     r.weight!==''?+r.weight:'',
     r.shipmentsPerYear!==''?+r.shipmentsPerYear:'',
     r.slotWeight!==''?+r.slotWeight:'',
+    r.cumWt!==''?+r.cumWt:'',
     r.travelMins!==''?+r.travelMins:'',
     r.serviceMins!==''?+r.serviceMins:'',
     r.cumulTimeHrs!==''?+r.cumulTimeHrs:''
   ]);
   const ws2 = XLSX.utils.aoa_to_sheet([detHeaders, ...detRows]);
-  ws2['!cols'] = [{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:20},{wch:20},{wch:18}];
+  ws2['!cols'] = [{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:22},{wch:20},{wch:20},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Route Details');
 
   XLSX.writeFile(wb, 'milkrun_hybrid_output.xlsx');
