@@ -159,7 +159,7 @@
       </div>
       <div>
         <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
-        <input type="number" id="maxDrops" value="10" min="1" max="50" step="0.5" />
+        <input type="number" id="maxDrops" value="6" min="1" max="50" step="0.5" />
       </div>
       <div>
         <label>Min Shipments/Year to Include</label>
@@ -183,7 +183,7 @@
     <div class="row2" style="margin-top:4px;margin-bottom:4px;">
       <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
         <div style="display:flex;align-items:center;gap:10px;">
-          <input type="checkbox" id="returnToOrigin" style="width:auto;accent-color:var(--teal);cursor:pointer;" />
+          <input type="checkbox" id="returnToOrigin" checked style="width:auto;accent-color:var(--teal);cursor:pointer;" />
           <label for="returnToOrigin" style="margin:0;cursor:pointer;font-size:.88rem;color:var(--text);">
             Include return to origin &mdash; add final leg back to depot in cumulative distance
           </label>
@@ -193,15 +193,15 @@
     <div class="row3" style="margin-top:14px;">
       <div>
         <label>Vehicle Speed (km/h) <span class="opt">optional</span></label>
-        <input type="number" id="speed" min="1" max="200" placeholder="e.g. 40" />
+        <input type="number" id="speed" min="1" max="200" value="40" />
       </div>
       <div>
-        <label>Time at Each Stop (min) <span class="opt">optional</span></label>
-        <input type="number" id="timeAtStop" min="0" placeholder="e.g. 30" />
+        <label>Time at Each Stop (min)</label>
+        <input type="number" id="timeAtStop" min="0" value="30" />
       </div>
       <div>
-        <label>Time at Origin (min) <span class="opt">optional</span></label>
-        <input type="number" id="timeAtOrigin" min="0" placeholder="e.g. 60" />
+        <label>Time at Origin (min)</label>
+        <input type="number" id="timeAtOrigin" min="0" value="60" />
       </div>
     </div>
     <div class="algo-box">
