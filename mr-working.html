@@ -552,20 +552,14 @@ function getPolarKey(stop, oLat, oLng) {
   return ring + '_' + sector;
 }
 
-// ── Dual-cap helper ───────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────
 const TRIPS_PER_YEAR = 156; // 6-day week, alternate-day dispatch
 
-function clExceedsCap(cl, maxDrops, maxPins) {
-  if (cl.length > maxPins) return true;
-  return cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0) > maxDrops;
-}
-
-// ── K-Means++ ─────────────────────────────────────────────────────────
-function kMeans(stops, k, maxDrops, maxPins) {
+// ── K-Means++ (geography only — no slot weights) ──────────────────────
+function kMeans(stops, k, maxPins) {
   if (stops.length <= k) return stops.map(s => [s]);
   k = Math.min(k, stops.length);
 
-  // k-means++ init
   const centroids = [stops[Math.floor(Math.random() * stops.length)]];
   while (centroids.length < k) {
     const dists = stops.map(s => {
@@ -610,22 +604,21 @@ function kMeans(stops, k, maxDrops, maxPins) {
   const result = [];
   for (const cl of raw) {
     if (!cl.length) continue;
-    if (!clExceedsCap(cl, maxDrops, maxPins)) { result.push(cl); continue; }
+    if (cl.length <= maxPins) { result.push(cl); continue; }
     for (let i = 0; i < cl.length; i += maxPins) result.push(cl.slice(i, i+maxPins));
   }
   return result;
 }
 
-// ── Hybrid clustering ─────────────────────────────────────────────────
-function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
-  // Step 1: dynamic polar bucketing — sector count scales with stop density per ring
+// ── Phase 1: Geographic clustering (proximity + maxPins only) ─────────
+function hybridCluster(stops, oLat, oLng, maxPins) {
+  // Dynamic sectors: double until each bucket targets ≤ maxPins stops
   const ringCounts = new Array(RING_KM.length).fill(0);
   for (const stop of stops) ringCounts[getRing(distRaw(oLat, oLng, stop.lat, stop.lng))]++;
-  const target = Math.max(1, Math.min(maxDrops, maxPins));
   const dynSectors = ringCounts.map(count => {
-    if (count <= target) return 4;
+    if (count <= maxPins) return 4;
     let s = 4;
-    while (count / s > target) s *= 2;
+    while (count / s > maxPins) s *= 2;
     return s;
   });
 
@@ -640,26 +633,21 @@ function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
     buckets.get(key).push(stop);
   }
 
-  // Step 2: k-means within each bucket
   let clusters = [];
   for (const bucket of buckets.values()) {
     if (!bucket.length) continue;
-    if (!clExceedsCap(bucket, maxDrops, maxPins)) { clusters.push(bucket); continue; }
-    const slotSum = bucket.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
-    const k = Math.max(Math.ceil(bucket.length / maxPins), Math.ceil(slotSum / maxDrops));
-    clusters.push(...kMeans(bucket, k, maxDrops, maxPins));
+    if (bucket.length <= maxPins) { clusters.push(bucket); continue; }
+    clusters.push(...kMeans(bucket, Math.ceil(bucket.length / maxPins), maxPins));
   }
 
-  // Step 3: iterate — split any still-oversized cluster
+  // Iterate — split any cluster still over maxPins
   let changed = true, iters = 0;
   while (changed && iters < 8) {
     changed = false;
     const next = [];
     for (const cl of clusters) {
-      if (clExceedsCap(cl, maxDrops, maxPins)) {
-        const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
-        const k = Math.max(Math.ceil(cl.length / maxPins), Math.ceil(slotSum / maxDrops));
-        next.push(...kMeans(cl, k, maxDrops, maxPins));
+      if (cl.length > maxPins) {
+        next.push(...kMeans(cl, Math.ceil(cl.length / maxPins), maxPins));
         changed = true;
       } else {
         next.push(cl);
@@ -672,11 +660,42 @@ function hybridCluster(stops, oLat, oLng, maxDrops, maxPins) {
   return clusters.filter(c => c.length > 0);
 }
 
+// ── Phase 2: Drop-based split (slot weights applied after geography) ───
+function splitByDrops(clusters, maxDrops, maxPins) {
+  let result = [...clusters];
+  let changed = true, iters = 0;
+  while (changed && iters < 8) {
+    changed = false;
+    const next = [];
+    for (const cl of result) {
+      const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+      if (slotSum <= maxDrops) { next.push(cl); continue; }
+      const k = Math.min(cl.length, Math.max(2, Math.ceil(slotSum / maxDrops)));
+      next.push(...kMeans(cl, k, maxPins));
+      changed = true;
+    }
+    result = next;
+    iters++;
+  }
+  return result;
+}
+
 // ── Minimum cluster size enforcement ─────────────────────────────────
-function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops) {
+function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops, oLat, oLng) {
   deviationStops = deviationStops || 0;
+  const orphaned = new Set(); // clusters with no direction-compatible merge target
+
+  function clBearing(cl) {
+    const lat = cl.reduce((s, p) => s + p.lat, 0) / cl.length;
+    const lng = cl.reduce((s, p) => s + p.lng, 0) / cl.length;
+    return bearing(oLat, oLng, lat, lng);
+  }
+  function angularDiff(a, b) {
+    return Math.abs(((a - b + 540) % 360) - 180); // 0–180
+  }
 
   function isSmall(cl) {
+    if (orphaned.has(cl)) return false; // orphans are kept as-is
     if (cl.length < minStops) return true;
     if (minDrops > 0) {
       const drops = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
@@ -696,34 +715,44 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
 
     if (small.length === 0) break;
 
-    // Edge case: all clusters are small — merge everything if possible
     if (ok.length === 0) {
       const all = small.flat();
-      if (!clExceedsCap(all, maxDrops, maxPins)) return [all];
+      if (all.length <= maxPins) return [all];
       return result;
     }
 
-    // Merge each small cluster into its nearest viable cluster (by centroid)
     for (const sm of small) {
       const smLat = sm.reduce((s, p) => s + p.lat, 0) / sm.length;
       const smLng = sm.reduce((s, p) => s + p.lng, 0) / sm.length;
-      let bestIdx = 0, bestDist = Infinity;
-      for (let i = 0; i < ok.length; i++) {
-        const cLat = ok[i].reduce((s, p) => s + p.lat, 0) / ok[i].length;
-        const cLng = ok[i].reduce((s, p) => s + p.lng, 0) / ok[i].length;
-        const d = distRaw(smLat, smLng, cLat, cLng);
-        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      const smB   = clBearing(sm);
+
+      // Try ±45° first, then widen to ±90°. Beyond 90° we don't merge — wrong direction.
+      let target = null;
+      for (const maxAngle of [45, 90]) {
+        let bestDist = Infinity;
+        for (const cl of ok) {
+          if (angularDiff(smB, clBearing(cl)) > maxAngle) continue;
+          const d = distRaw(smLat, smLng,
+            cl.reduce((s,p) => s+p.lat, 0)/cl.length,
+            cl.reduce((s,p) => s+p.lng, 0)/cl.length);
+          if (d < bestDist) { bestDist = d; target = cl; }
+        }
+        if (target) break;
       }
-      ok[bestIdx].push(...sm);
+
+      if (!target) {
+        // No same-direction cluster within 90° — keep as isolated orphan
+        orphaned.add(sm);
+        ok.push(sm);
+        continue;
+      }
+      target.push(...sm);
     }
 
-    // Re-split if merged cluster exceeds caps (deviation applies to raw count only)
     result = [];
     for (const cl of ok) {
-      if (!clExceedsCap(cl, maxDrops + deviationStops, maxPins)) { result.push(cl); continue; }
-      const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
-      const k = Math.max(Math.ceil(cl.length / maxPins), Math.ceil(slotSum / maxDrops));
-      result.push(...kMeans(cl, k, maxDrops, maxPins));
+      if (cl.length <= maxPins + deviationStops) { result.push(cl); continue; }
+      result.push(...kMeans(cl, Math.ceil(cl.length / maxPins), maxPins));
     }
   }
 
@@ -828,9 +857,13 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
-  const clusters = enforceMinClusterSize(
-    hybridCluster(rawStops, oLat, oLng, cfg.maxDrops, cfg.maxPins),
-    cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops
+  // Phase 1: geography-only clustering (maxPins hard cap)
+  // Phase 2: split any cluster whose slot-weight sum exceeds maxDrops
+  // Phase 3: merge small clusters (direction-aware)
+  const geoClusters  = hybridCluster(rawStops, oLat, oLng, cfg.maxPins);
+  const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins);
+  const clusters     = enforceMinClusterSize(
+    dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng
   );
 
   const hasWeightData = rawStops.some(s => s.weight > 0);
