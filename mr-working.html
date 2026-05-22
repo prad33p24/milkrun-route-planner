@@ -559,64 +559,26 @@ function getPolarKey(stop, oLat, oLng) {
 // ── Constants ─────────────────────────────────────────────────────────
 const TRIPS_PER_YEAR = 156; // 6-day week, alternate-day dispatch
 
-// ── K-Means++ (geography only — no slot weights) ──────────────────────
-function kMeans(stops, k, maxPins) {
-  if (stops.length <= k) return stops.map(s => [s]);
-  k = Math.min(k, stops.length);
-
-  const centroids = [stops[Math.floor(Math.random() * stops.length)]];
-  while (centroids.length < k) {
-    const dists = stops.map(s => {
-      let minD = Infinity;
-      for (const c of centroids) { const d = distRaw(s.lat,s.lng,c.lat,c.lng); if (d<minD) minD=d; }
-      return minD * minD;
-    });
-    const total = dists.reduce((a,b) => a+b, 0);
-    let chosen = stops[centroids.length % stops.length];
-    if (total > 0) {
-      let r = Math.random() * total;
-      for (let i = 0; i < stops.length; i++) { r -= dists[i]; if (r <= 0) { chosen = stops[i]; break; } }
-    }
-    centroids.push(chosen);
-  }
-
-  let assignments = new Array(stops.length).fill(0);
-  for (let iter = 0; iter < 150; iter++) {
-    const newA = stops.map(s => {
-      let bi = 0, bd = Infinity;
-      for (let ci = 0; ci < centroids.length; ci++) {
-        const d = distRaw(s.lat,s.lng,centroids[ci].lat,centroids[ci].lng);
-        if (d < bd) { bd = d; bi = ci; }
-      }
-      return bi;
-    });
-    const same = newA.every((a,i) => a === assignments[i]);
-    assignments = newA;
-    if (same) break;
-    for (let ci = 0; ci < k; ci++) {
-      const pts = stops.filter((_,i) => assignments[i] === ci);
-      if (pts.length > 0) centroids[ci] = {
-        lat: pts.reduce((s,p) => s+p.lat, 0) / pts.length,
-        lng: pts.reduce((s,p) => s+p.lng, 0) / pts.length,
-        pin: '', weight: 0, shipmentsPerYear: 0, slotWeight: 1
-      };
-    }
-  }
-
-  const raw = Array.from({length: k}, () => []);
-  stops.forEach((s,i) => raw[assignments[i]].push(s));
+// ── Direction-preserving split helper ────────────────────────────────
+// Sort stops by bearing from origin (primary) then distance (secondary),
+// then split into maxCount-sized chunks. This keeps each chunk in a tight
+// directional corridor with no back-and-forth.
+function dirSplit(stops, oLat, oLng, maxCount) {
+  if (stops.length <= maxCount) return [stops];
+  const sorted = stops.slice().sort((a, b) => {
+    const bA = bearing(oLat, oLng, a.lat, a.lng);
+    const bB = bearing(oLat, oLng, b.lat, b.lng);
+    if (Math.abs(bA - bB) > 0.001) return bA - bB;
+    return distRaw(oLat, oLng, a.lat, a.lng) - distRaw(oLat, oLng, b.lat, b.lng);
+  });
   const result = [];
-  for (const cl of raw) {
-    if (!cl.length) continue;
-    if (cl.length <= maxPins) { result.push(cl); continue; }
-    for (let i = 0; i < cl.length; i += maxPins) result.push(cl.slice(i, i+maxPins));
-  }
+  for (let i = 0; i < sorted.length; i += maxCount) result.push(sorted.slice(i, i + maxCount));
   return result;
 }
 
-// ── Phase 1: Geographic clustering (proximity + maxPins only) ─────────
+// ── Phase 1: Geographic clustering (direction + distance, no kMeans) ──
 function hybridCluster(stops, oLat, oLng, maxPins) {
-  // Dynamic sectors: double until each bucket targets ≤ maxPins stops
+  // Dynamic sectors: double until each bucket ≤ maxPins stops
   const ringCounts = new Array(RING_KM.length).fill(0);
   for (const stop of stops) ringCounts[getRing(distRaw(oLat, oLng, stop.lat, stop.lng))]++;
   const dynSectors = ringCounts.map(count => {
@@ -626,6 +588,8 @@ function hybridCluster(stops, oLat, oLng, maxPins) {
     return s;
   });
 
+  // Bucket by ring + sector, then within each bucket sort by bearing→distance
+  // and split sequentially — routes flow outward in one direction, no zigzag
   const buckets = new Map();
   for (const stop of stops) {
     const km   = distRaw(oLat, oLng, stop.lat, stop.lng);
@@ -637,49 +601,23 @@ function hybridCluster(stops, oLat, oLng, maxPins) {
     buckets.get(key).push(stop);
   }
 
-  let clusters = [];
+  const clusters = [];
   for (const bucket of buckets.values()) {
     if (!bucket.length) continue;
-    if (bucket.length <= maxPins) { clusters.push(bucket); continue; }
-    clusters.push(...kMeans(bucket, Math.ceil(bucket.length / maxPins), maxPins));
+    for (const cl of dirSplit(bucket, oLat, oLng, maxPins)) clusters.push(cl);
   }
-
-  // Iterate — split any cluster still over maxPins
-  let changed = true, iters = 0;
-  while (changed && iters < 8) {
-    changed = false;
-    const next = [];
-    for (const cl of clusters) {
-      if (cl.length > maxPins) {
-        next.push(...kMeans(cl, Math.ceil(cl.length / maxPins), maxPins));
-        changed = true;
-      } else {
-        next.push(cl);
-      }
-    }
-    clusters = next;
-    iters++;
-  }
-
   return clusters.filter(c => c.length > 0);
 }
 
 // ── Phase 2: Drop-based split (slot weights applied after geography) ───
-function splitByDrops(clusters, maxDrops, maxPins) {
-  let result = [...clusters];
-  let changed = true, iters = 0;
-  while (changed && iters < 8) {
-    changed = false;
-    const next = [];
-    for (const cl of result) {
-      const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
-      if (slotSum <= maxDrops) { next.push(cl); continue; }
-      const k = Math.min(cl.length, Math.max(2, Math.ceil(slotSum / maxDrops)));
-      next.push(...kMeans(cl, k, maxPins));
-      changed = true;
-    }
-    result = next;
-    iters++;
+function splitByDrops(clusters, maxDrops, maxPins, oLat, oLng) {
+  const result = [];
+  for (const cl of clusters) {
+    const slotSum = cl.reduce((s, st) => s + (st.slotWeight !== undefined ? st.slotWeight : 1), 0);
+    if (slotSum <= maxDrops) { result.push(cl); continue; }
+    const k = Math.max(2, Math.ceil(slotSum / maxDrops));
+    // Split direction-preserving: bearing→distance order, then chunk
+    for (const sub of dirSplit(cl, oLat, oLng, Math.ceil(cl.length / k))) result.push(sub);
   }
   return result;
 }
@@ -778,7 +716,7 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
     result = [];
     for (const cl of ok) {
       if (cl.length <= maxPins) { result.push(cl); continue; }
-      result.push(...kMeans(cl, Math.ceil(cl.length / maxPins), maxPins));
+      for (const sub of dirSplit(cl, oLat, oLng, maxPins)) result.push(sub);
     }
   }
 
@@ -886,7 +824,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
   // Phase 2: split any cluster whose slot-weight sum exceeds maxDrops
   // Phase 3: merge small clusters (direction-aware)
   const geoClusters  = hybridCluster(rawStops, oLat, oLng, cfg.maxPins);
-  const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins);
+  const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
   const clusters     = enforceMinClusterSize(
     dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng
   );
@@ -959,7 +897,9 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         if (d < bestDist) { bestDist = d; bestIdx = i; }
       }
       const target = fitsIn[bestIdx];
-      target.cl.push(...uf.cl);
+      // Merge and keep direction-sorted order
+      const merged = dirSplit([...target.cl, ...uf.cl], oLat, oLng, cfg.maxPins);
+      target.cl = merged[0]; // stays within maxPins since we checked fitsIn filter
       // Recompute cluster-avg slot weights for merged cluster
       const td2 = target.cl.filter(st => st.shipmentsPerYear > 0);
       if (td2.length) {
