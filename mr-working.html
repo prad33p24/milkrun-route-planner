@@ -777,7 +777,7 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
 
     result = [];
     for (const cl of ok) {
-      if (cl.length <= maxPins + deviationStops) { result.push(cl); continue; }
+      if (cl.length <= maxPins) { result.push(cl); continue; }
       result.push(...kMeans(cl, Math.ceil(cl.length / maxPins), maxPins));
     }
   }
