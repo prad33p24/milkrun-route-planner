@@ -446,8 +446,19 @@ function cellBoundsLatLng(oLat, oLng, row, col, cellKm) {
   return [[latMin, lngMin], [latMax, lngMax]];
 }
 
-function cellColor(row, col) {
+// Box color: keyed on (row,col) only — the geographic rectangle is drawn once
+// per box regardless of how many state-groups share it.
+function boxColor(row, col) {
   const h = Math.abs(row * 92837111 ^ col * 689287499);
+  return COLORS[h % COLORS.length];
+}
+
+// Group color: keyed on the full cell label (includes state suffix when
+// cross-state mixing is disallowed), so split sub-groups inside the same
+// box render as visually distinct marker colors.
+function groupColor(label) {
+  let h = 0;
+  for (let i = 0; i < label.length; i++) h = (h * 31 + label.charCodeAt(i)) >>> 0;
   return COLORS[h % COLORS.length];
 }
 
@@ -514,25 +525,40 @@ function renderMap(results, cellKm) {
       })
     }).bindPopup('<b>Origin</b><br>' + r.originName + '<br>Pincode: ' + r.originPin).addTo(leafletMap);
 
+    // Draw the geographic box once per unique (row,col) — never duplicated
+    // when a box is split into multiple state-groups.
+    const drawnBoxes = new Map(); // 'row_col' -> [cell, cell, ...] sharing that box
     for (const cell of r.cells) {
-      const color = cellColor(cell.row, cell.col);
-      const rect = cellBoundsLatLng(r.oLat, r.oLng, cell.row, cell.col, cellKm);
-      L.rectangle(rect, {color, weight: 1, fillOpacity: 0.08, dashArray: '4,3'})
-        .bindPopup('<b>Cell ' + cell.label + '</b><br>' + cell.stops.length + ' pincode(s)<br>States: ' + cell.states.join(', ') + '<br>Avg dist: ' + cell.avgDistKm.toFixed(0) + ' km')
+      const boxKey = cell.row + '_' + cell.col;
+      if (!drawnBoxes.has(boxKey)) drawnBoxes.set(boxKey, []);
+      drawnBoxes.get(boxKey).push(cell);
+    }
+    for (const [boxKey, cellsInBox] of drawnBoxes) {
+      const first  = cellsInBox[0];
+      const bColor = boxColor(first.row, first.col);
+      const rect   = cellBoundsLatLng(r.oLat, r.oLng, first.row, first.col, cellKm);
+      const allStates = [...new Set(cellsInBox.flatMap(c => c.states))];
+      const totalPins  = cellsInBox.reduce((s,c) => s + c.stops.length, 0);
+      L.rectangle(rect, {color: bColor, weight: 1, fillOpacity: 0.05, dashArray: '4,3'})
+        .bindPopup('<b>Box ' + first.baseLabel + '</b><br>' + totalPins + ' pincode(s)<br>States: ' + allStates.join(', ')
+          + (cellsInBox.length > 1 ? '<br><i>Split into ' + cellsInBox.length + ' groups (cross-state mixing disallowed)</i>' : ''))
         .addTo(leafletMap);
       bounds.push(rect[0], rect[1]);
+    }
 
+    for (const cell of r.cells) {
+      const gColor = groupColor(cell.label);
       const legendKey = r.originPin + '_' + cell.label;
       if (!seenLegend.has(legendKey)) {
         seenLegend.add(legendKey);
-        legendHtml += '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>' +
+        legendHtml += '<span class="legend-item"><span class="legend-dot" style="background:' + gColor + '"></span>' +
           (results.length > 1 ? r.originName + ' &middot; ' : '') + cell.label + ' (' + cell.stops.length + ')</span>';
       }
 
       for (const s of cell.stops) {
         bounds.push([s.lat, s.lng]);
         L.circleMarker([s.lat, s.lng], {
-          radius: 5, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 0.9
+          radius: 5, color: '#fff', weight: 1.5, fillColor: gColor, fillOpacity: 0.9
         }).bindPopup('<b>' + s.pin + '</b><br>State: ' + s.state + '<br>Cell: ' + cell.label + '<br>Dist from origin: ' + s.distKm.toFixed(1) + ' km')
           .addTo(leafletMap);
       }
@@ -613,7 +639,7 @@ function compute() {
       tableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:var(--teal-lt);border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:var(--teal);">&#128205; Origin: ' + r.originName + ' (' + r.originPin + ')</div>';
     }
     for (const cell of r.cells) {
-      const color = cellColor(cell.row, cell.col);
+      const color = groupColor(cell.label);
       tableHtml += '<div class="cl-header">'
         + '<span class="cl-badge" style="background:' + color + '">' + cell.label + '</span>'
         + '<span>' + cell.stops.length + ' pincode' + (cell.stops.length!==1?'s':'') + '</span>'
