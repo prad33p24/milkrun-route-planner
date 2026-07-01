@@ -601,10 +601,17 @@ function compute() {
 
     for (const cell of r.cells) {
       if (cell.mixed) mixedCellCount++;
+      const bounds = cellBoundsLatLng(r.oLat, r.oLng, cell.row, cell.col, cellKm);
+      const latMin = bounds[0][0], lngMin = bounds[0][1];
+      const latMax = bounds[1][0], lngMax = bounds[1][1];
       cellSummaryRows.push({
         originPin: r.originPin, originName: r.originName, cellLabel: cell.label,
         states: cell.states.join('; '), pincodeCount: cell.stops.length,
-        avgDistKm: cell.avgDistKm.toFixed(1), row: cell.row, col: cell.col
+        avgDistKm: cell.avgDistKm.toFixed(1), row: cell.row, col: cell.col,
+        nwLat: latMax.toFixed(6), nwLng: lngMin.toFixed(6),
+        neLat: latMax.toFixed(6), neLng: lngMax.toFixed(6),
+        seLat: latMin.toFixed(6), seLng: lngMax.toFixed(6),
+        swLat: latMin.toFixed(6), swLng: lngMin.toFixed(6)
       });
       for (const s of cell.stops) {
         exportRows.push({
@@ -675,10 +682,17 @@ function dlCSV() {
   if (!exportRows.length || typeof XLSX === 'undefined') { alert('Output not ready'); return; }
   const wb = XLSX.utils.book_new();
 
-  const sumHeaders = ['Origin Pincode','Origin Name','Cell Label','States','Pincode Count','Avg Distance (km)','Row','Col'];
-  const sumRows = cellSummaryRows.map(s => [s.originPin, s.originName, s.cellLabel, s.states, s.pincodeCount, +s.avgDistKm, s.row, s.col]);
+  const sumHeaders = [
+    'Origin Pincode','Origin Name','Cell Label','States','Pincode Count','Avg Distance (km)','Row','Col',
+    'NW Lat','NW Lng','NE Lat','NE Lng','SE Lat','SE Lng','SW Lat','SW Lng'
+  ];
+  const sumRows = cellSummaryRows.map(s => [
+    s.originPin, s.originName, s.cellLabel, s.states, s.pincodeCount, +s.avgDistKm, s.row, s.col,
+    +s.nwLat, +s.nwLng, +s.neLat, +s.neLng, +s.seLat, +s.seLng, +s.swLat, +s.swLng
+  ]);
   const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
-  ws1['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:24},{wch:14},{wch:18},{wch:8},{wch:8}];
+  ws1['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:24},{wch:14},{wch:18},{wch:8},{wch:8},
+                  {wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Cell Summary');
 
   const detHeaders = ['Origin Pincode','Origin Name','Cell Label','Pincode','State','Distance from Origin (km)','East-West Offset (km)','North-South Offset (km)'];
