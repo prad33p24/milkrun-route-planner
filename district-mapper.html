@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>District Mapper — Fixed Grid Pincode Binning</title>
+  <title>Cluster Grid — Fixed Grid Pincode Binning</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {
@@ -104,9 +104,9 @@
   <header>
     <h1>
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0f766e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-      District Mapper
+      Cluster Grid
     </h1>
-    <p class="sub">Fixed-grid pincode binning — assigns destinations to constant-size geographic cells around each origin point.</p>
+    <p class="sub">Cluster Grid — fixed-size geographic cells around each origin, with state-boundary awareness and full summary export.</p>
     <div class="badges">
       <span class="badge badge-green">&#10003; 19,337 pincodes built-in (with state)</span>
       <span class="badge badge-teal">&#9638; Fixed grid — any cell size</span>
@@ -213,7 +213,8 @@ let fileOriginMap = new Map();   // Map<originPin, destPin[]> — multi-origin m
 let originNameMap = new Map();   // Map<originPin, originName>
 let isMultiOrigin = false;
 let leafletMap = null;
-let exportRows = [], cellSummaryRows = [];
+let exportRows = [], cellSummaryRows = [], inputRows = [];
+let lastCellKm = 100;
 
 // ── Template download ─────────────────────────────────────────────────
 function downloadTemplate() {
@@ -231,8 +232,8 @@ function downloadTemplate() {
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}];
-  XLSX.utils.book_append_sheet(wb, ws, 'District Mapper Input');
-  XLSX.writeFile(wb, 'district_mapper_template.xlsb', {bookType: 'xlsb'});
+  XLSX.utils.book_append_sheet(wb, ws, 'Cluster Grid Input');
+  XLSX.writeFile(wb, 'cluster_grid_template.xlsb', {bookType: 'xlsb'});
 }
 
 // ── File upload ───────────────────────────────────────────────────────
@@ -586,9 +587,16 @@ function compute() {
     originGroups = new Map([[oPin, pins]]);
   }
 
-  exportRows = []; cellSummaryRows = [];
+  exportRows = []; cellSummaryRows = []; inputRows = [];
+  lastCellKm = cellKm;
   const results = [], allNotFound = [];
   let totalCells = 0, totalStops = 0, mixedCellCount = 0;
+
+  // Capture raw input for the Input Data sheet
+  for (const [oPin, destPins] of originGroups) {
+    const oName = originNameMap.get(oPin) || '';
+    for (const pin of destPins) inputRows.push({originPin: oPin, originName: oName, destPin: pin});
+  }
 
   for (const [originPin, destPins] of originGroups) {
     if (!geoMap.has(originPin)) { allNotFound.push(originPin + ' (origin not found)'); continue; }
@@ -606,7 +614,8 @@ function compute() {
       const latMax = bounds[1][0], lngMax = bounds[1][1];
       cellSummaryRows.push({
         originPin: r.originPin, originName: r.originName, cellLabel: cell.label,
-        states: cell.states.join('; '), pincodeCount: cell.stops.length,
+        states: cell.states.join('; '), stateMix: cell.mixed ? 'Mixed' : 'Single',
+        pincodeCount: cell.stops.length,
         avgDistKm: cell.avgDistKm.toFixed(1), row: cell.row, col: cell.col,
         nwLat: latMax.toFixed(6), nwLng: lngMin.toFixed(6),
         neLat: latMax.toFixed(6), neLng: lngMax.toFixed(6),
@@ -682,26 +691,73 @@ function dlCSV() {
   if (!exportRows.length || typeof XLSX === 'undefined') { alert('Output not ready'); return; }
   const wb = XLSX.utils.book_new();
 
-  const sumHeaders = [
-    'Origin Pincode','Origin Name','Cell Label','States','Pincode Count','Avg Distance (km)','Row','Col',
+  // ── Sheet 1: Summary ──────────────────────────────────────────────────
+  const pinCounts  = cellSummaryRows.map(s => s.pincodeCount);
+  const maxPins    = Math.max(...pinCounts);
+  const minPins    = Math.min(...pinCounts);
+  const avgPins    = (pinCounts.reduce((a,b)=>a+b,0) / pinCounts.length);
+  const mixedCells = cellSummaryRows.filter(s => s.stateMix === 'Mixed').length;
+  const singleCells= cellSummaryRows.length - mixedCells;
+  const uniqueStates = new Set(cellSummaryRows.flatMap(s => s.states.split('; '))).size;
+  const uniqueOrigins= new Set(cellSummaryRows.map(s => s.originPin)).size;
+  const topCell    = cellSummaryRows.reduce((a,b) => b.pincodeCount > a.pincodeCount ? b : a);
+  const botCell    = cellSummaryRows.reduce((a,b) => b.pincodeCount < a.pincodeCount ? b : a);
+
+  const summaryData = [
+    ['Metric', 'Value'],
+    ['Total Pincodes Mapped', exportRows.length],
+    ['Total Cells', cellSummaryRows.length],
+    ['Total Origins', uniqueOrigins],
+    ['States Covered', uniqueStates],
+    ['Single-State Cells', singleCells],
+    ['Mixed-State Cells', mixedCells],
+    ['Max Pincodes in a Cell', maxPins],
+    ['Cell with Most Pincodes', topCell.cellLabel + ' — ' + topCell.originName + ' (' + topCell.pincodeCount + ')'],
+    ['Min Pincodes in a Cell', minPins],
+    ['Cell with Fewest Pincodes', botCell.cellLabel + ' — ' + botCell.originName + ' (' + botCell.pincodeCount + ')'],
+    ['Avg Pincodes per Cell', +avgPins.toFixed(1)],
+    ['Grid Cell Size (km)', lastCellKm],
+    ['Cell Area (sq km)', lastCellKm * lastCellKm],
+  ];
+  const wsSum = XLSX.utils.aoa_to_sheet(summaryData);
+  wsSum['!cols'] = [{wch:28}, {wch:40}];
+  XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
+
+  // ── Sheet 2: Cell Summary ─────────────────────────────────────────────
+  const cellHeaders = [
+    'Origin Pincode','Origin Name','Cell Label','States','State Mix',
+    'Pincode Count','Avg Distance (km)','Row','Col',
     'NW Lat','NW Lng','NE Lat','NE Lng','SE Lat','SE Lng','SW Lat','SW Lng'
   ];
-  const sumRows = cellSummaryRows.map(s => [
-    s.originPin, s.originName, s.cellLabel, s.states, s.pincodeCount, +s.avgDistKm, s.row, s.col,
+  const cellRows = cellSummaryRows.map(s => [
+    s.originPin, s.originName, s.cellLabel, s.states, s.stateMix,
+    s.pincodeCount, +s.avgDistKm, s.row, s.col,
     +s.nwLat, +s.nwLng, +s.neLat, +s.neLng, +s.seLat, +s.seLng, +s.swLat, +s.swLng
   ]);
-  const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
-  ws1['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:24},{wch:14},{wch:18},{wch:8},{wch:8},
+  const ws1 = XLSX.utils.aoa_to_sheet([cellHeaders, ...cellRows]);
+  ws1['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:28},{wch:12},{wch:14},{wch:18},{wch:6},{wch:6},
                   {wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Cell Summary');
 
-  const detHeaders = ['Origin Pincode','Origin Name','Cell Label','Pincode','State','Distance from Origin (km)','East-West Offset (km)','North-South Offset (km)'];
-  const detRows = exportRows.map(r => [r.originPin, r.originName, r.cellLabel, r.pincode, r.state, +r.distKm, +r.dxKm, +r.dyKm]);
+  // ── Sheet 3: Pincode Detail ───────────────────────────────────────────
+  const detHeaders = ['Origin Pincode','Origin Name','Cell Label','Pincode','State',
+    'Distance from Origin (km)','East-West Offset (km)','North-South Offset (km)'];
+  const detRows = exportRows.map(r => [
+    r.originPin, r.originName, r.cellLabel, r.pincode, r.state,
+    +r.distKm, +r.dxKm, +r.dyKm
+  ]);
   const ws2 = XLSX.utils.aoa_to_sheet([detHeaders, ...detRows]);
   ws2['!cols'] = [{wch:14},{wch:16},{wch:14},{wch:14},{wch:18},{wch:22},{wch:20},{wch:20}];
   XLSX.utils.book_append_sheet(wb, ws2, 'Pincode Detail');
 
-  XLSX.writeFile(wb, 'district_mapper_output.xlsx');
+  // ── Sheet 4: Input Data ───────────────────────────────────────────────
+  const inpHeaders = ['Origin Name', 'Origin Pincode', 'Destination Pincode'];
+  const inpRows = inputRows.map(r => [r.originName, r.originPin, r.destPin]);
+  const ws3 = XLSX.utils.aoa_to_sheet([inpHeaders, ...inpRows]);
+  ws3['!cols'] = [{wch:16},{wch:18},{wch:22}];
+  XLSX.utils.book_append_sheet(wb, ws3, 'Input Data');
+
+  XLSX.writeFile(wb, 'cluster_grid_output.xlsx');
 }
 
 // ── Error helper ──────────────────────────────────────────────────────
