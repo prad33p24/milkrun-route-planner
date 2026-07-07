@@ -1118,15 +1118,9 @@ function compute() {
   if (allNotFound.length)
     statsHtml += '<div class="stat" style="background:#fee2e2"><div class="stat-n" style="color:var(--red)">'+allNotFound.length+'</div><div class="stat-l">Skipped</div></div>';
 
-  document.getElementById('statsArea').innerHTML  = statsHtml;
-  document.getElementById('alertArea').innerHTML  = allNotFound.length
+  const alertHtml = allNotFound.length
     ? '<div class="alert alert-warn">&#9888; Skipped: '+allNotFound.slice(0,10).join(', ')+(allNotFound.length>10?' …':'')+'</div>' : '';
-  document.getElementById('tableArea').innerHTML  = allTableHtml;
-
-  const res = document.getElementById('results');
-  res.classList.add('show');
-  res.scrollIntoView({behavior:'smooth', block:'start'});
-  setTimeout(() => renderMap(allTourGroups), 100);
+  openOutputTab(statsHtml, alertHtml, allTableHtml, allTourGroups, exportRows, clusterSummary);
 }
 
 // ── CSV download ──────────────────────────────────────────────────────
@@ -1166,6 +1160,104 @@ function dlCSV() {
   XLSX.utils.book_append_sheet(wb, ws2, 'Route Details');
 
   XLSX.writeFile(wb, 'milkrun_hybrid_output.xlsx');
+}
+
+// ── Open results in new tab ───────────────────────────────────────────
+function openOutputTab(statsHtml, alertHtml, tableHtml, tourGroups, expRows, clusterSum) {
+  var COLS=['#0f766e','#2563eb','#dc2626','#d97706','#7c3aed','#0891b2','#be185d','#65a30d','#c2410c','#16a34a','#b45309','#4f46e5'];
+  var mapData=JSON.stringify(tourGroups);
+  var exRows=JSON.stringify(expRows);
+  var clSum=JSON.stringify(clusterSum);
+
+  var mapScript='var MAP_DATA='+mapData+';'
+    +'var COLS='+JSON.stringify(COLS)+';'
+    +'document.addEventListener("DOMContentLoaded",function(){'
+    +'var map=L.map("map");'
+    +'L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"&copy; OpenStreetMap contributors",maxZoom:18}).addTo(map);'
+    +'var bounds=[],leg="<b style=\'font-size:.8rem;color:#64748b\'>Clusters:</b>",gci=0;'
+    +'MAP_DATA.forEach(function(grp){'
+    +'var oLat=grp.oLat,oLng=grp.oLng;'
+    +'bounds.push([oLat,oLng]);'
+    +'L.marker([oLat,oLng],{icon:L.divIcon({className:"",html:"<div style=\'background:#1e293b;color:#fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)\'>&#127981;<\/div>",iconSize:[34,34],iconAnchor:[17,17]})}).bindPopup("<b>Origin<\/b><br>"+(grp.originName||grp.originPin)+"<br>"+grp.originPin).addTo(map);'
+    +'grp.toursByCluster.forEach(function(tour,ci){'
+    +'var color=COLS[gci%COLS.length];'
+    +'var label=(grp.clusterLabels&&grp.clusterLabels[ci])||("Cluster "+(ci+1));'
+    +'var line=[[oLat,oLng]];'
+    +'tour.forEach(function(stop,vi){'
+    +'line.push([stop.lat,stop.lng]);bounds.push([stop.lat,stop.lng]);'
+    +'var popup="<b>"+label+" &middot; Stop "+(vi+1)+"<\/b><br>Pincode: "+stop.pin;'
+    +'if(stop.weight>0)popup+="<br>Avg Wt: "+stop.weight+" kg";'
+    +'L.marker([stop.lat,stop.lng],{icon:L.divIcon({className:"",html:"<div style=\'background:"+color+";color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;border:2px solid #fff;box-shadow:0 2px 4px rgba(0,0,0,.3)\'>"+(vi+1)+"<\/div>",iconSize:[26,26],iconAnchor:[13,13]})}).bindPopup(popup).addTo(map);'
+    +'});'
+    +'L.polyline(line,{color:color,weight:3,opacity:0.8}).addTo(map);'
+    +'leg+="<span style=\'display:inline-flex;align-items:center;gap:4px;font-size:.8rem\'><span style=\'width:11px;height:11px;border-radius:50%;background:"+color+";display:inline-block\'><\/span>"+label+"<\/span>";'
+    +'gci++;});});'
+    +'document.getElementById("mapLegend").innerHTML=leg;'
+    +'if(bounds.length)map.fitBounds(bounds,{padding:[32,32]});});';
+
+  var dlScript='var ER='+exRows+',CS='+clSum+';'
+    +'function dlCSV(){'
+    +'if(typeof XLSX==="undefined"){setTimeout(dlCSV,500);return;}'
+    +'var wb=XLSX.utils.book_new();'
+    +'var sh=["Origin Pincode","Origin Name","Cluster","Max Pincodes","Avg Drops/Trip","Cumulative Dist (km)","Max Leg (km)","Avg Leg (km)","Total Weight (kg)","Avg Weight/Trip (kg)","Total TAT (hrs)","Status"];'
+    +'var sr=CS.map(function(s){return[s.origin,s.originName||"",s.name,s.stops,'
+    +'s.avgDropsPerTrip!==""?+s.avgDropsPerTrip:"",+s.cumDist,+s.maxLeg,+s.avgLeg,'
+    +'s.totalWeight!==""?+s.totalWeight:"",s.avgWeightPerTrip!==""?+s.avgWeightPerTrip:"",'
+    +'s.totalTATHrs!==""?+s.totalTATHrs:"",s.flag||""];});'
+    +'var ws1=XLSX.utils.aoa_to_sheet([sh].concat(sr));'
+    +'ws1["!cols"]=[{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:20},{wch:22},{wch:16},{wch:16}];'
+    +'XLSX.utils.book_append_sheet(wb,ws1,"Clusters");'
+    +'var dh=["Origin","Cluster","Visit #","From Pincode","To Pincode","Leg (km)","Cumulative (km)","Avg Weight/Shipment (kg)","Shipments/Year","Slot Weight","Cumul. Wt/Trip (kg)","Travel Time (min)","Service Time (min)","Cumul. Time (hrs)"];'
+    +'var dr=ER.map(function(r){return[r.origin,r.cluster,r.visit,r.from,r.to,+r.leg,+r.cum,'
+    +'r.weight!==""?+r.weight:"",r.shipmentsPerYear!==""?+r.shipmentsPerYear:"",'
+    +'r.slotWeight!==""?+r.slotWeight:"",r.cumWt!==""?+r.cumWt:"",'
+    +'r.travelMins!==""?+r.travelMins:"",r.serviceMins!==""?+r.serviceMins:"",'
+    +'r.cumulTimeHrs!==""?+r.cumulTimeHrs:""];});'
+    +'var ws2=XLSX.utils.aoa_to_sheet([dh].concat(dr));'
+    +'ws2["!cols"]=[{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:22},{wch:20},{wch:20},{wch:18}];'
+    +'XLSX.utils.book_append_sheet(wb,ws2,"Route Details");'
+    +'XLSX.writeFile(wb,"milkrun_planner_output.xlsx");}';
+
+  var css='*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}'
+    +'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:24px 16px 64px}'
+    +'.wrap{max-width:960px;margin:0 auto}'
+    +'.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px}'
+    +'h1{font-size:1.5rem;font-weight:700}'
+    +'.dl{padding:10px 22px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer}'
+    +'.dl:hover{background:#15803d}'
+    +'.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}'
+    +'.stat{background:#f0fdfa;border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:110px}'
+    +'.stat-n{font-size:1.4rem;font-weight:700;color:#0f766e}'
+    +'.stat-l{font-size:.76rem;color:#64748b;margin-top:2px}'
+    +'#map{height:480px;border-radius:10px;margin-bottom:16px;border:1px solid #e2e8f0}'
+    +'.map-legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;font-size:.8rem}'
+    +'.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:18px}'
+    +'table{width:100%;border-collapse:collapse;font-size:.85rem}'
+    +'th{background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:9px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase;white-space:nowrap}'
+    +'td{padding:8px 12px;border-bottom:1px solid #e2e8f0;vertical-align:middle}'
+    +'tr:last-child td{border-bottom:none}tr:hover td{background:#fafafa}'
+    +'.al{padding:10px 14px;border-radius:8px;font-size:.84rem;margin-bottom:12px}'
+    +'.al-warn{background:#fef9c3;border:1px solid #fde047;color:#713f12}';
+
+  var html='<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>'
+    +'<meta name="viewport" content="width=device-width,initial-scale=1.0"/>'
+    +'<title>Milkrun Route Planner — Results</title>'
+    +'<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>'
+    +'<style>'+css+'</style></head><body><div class="wrap">'
+    +'<div class="top"><h1>&#x1F69A; Milkrun Route Planner — Results</h1>'
+    +'<button class="dl" onclick="dlCSV()">&#11015; Download Excel</button></div>'
+    +alertHtml
+    +'<div class="stats">'+statsHtml+'</div>'
+    +'<div id="map"></div><div class="map-legend" id="mapLegend"></div>'
+    +'<div class="card" style="overflow-x:auto">'+tableHtml+'</div>'
+    +'</div>'
+    +'<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>'
+    +'<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"><\/script>'
+    +'<script>'+mapScript+dlScript+'<\/script>'
+    +'</body></html>';
+
+  var blob=new Blob([html],{type:'text/html'});
+  window.open(URL.createObjectURL(blob),'_blank');
 }
 
 // ── Error helper ──────────────────────────────────────────────────────

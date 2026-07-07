@@ -646,45 +646,186 @@ function compute() {
   if (allNotFound.length)
     statsHtml += '<div class="stat" style="background:#fee2e2"><div class="stat-n" style="color:var(--red)">'+allNotFound.length+'</div><div class="stat-l">Skipped</div></div>';
 
-  document.getElementById('statsArea').innerHTML = statsHtml;
-  document.getElementById('alertArea').innerHTML = allNotFound.length
+  const alertHtml = allNotFound.length
     ? '<div class="alert alert-warn">&#9888; Skipped: '+allNotFound.slice(0,10).join(', ')+(allNotFound.length>10?' …':'')+'</div>' : '';
 
   let tableHtml = '';
   for (const r of results) {
     if (results.length > 1) {
-      tableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:var(--teal-lt);border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:var(--teal);">&#128205; Origin: ' + r.originName + ' (' + r.originPin + ')</div>';
+      tableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:#f0fdfa;border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:#0f766e;">&#128205; Origin: ' + r.originName + ' (' + r.originPin + ')</div>';
     }
     for (const cell of r.cells) {
       const color = groupColor(cell.label);
-      tableHtml += '<div class="cl-header">'
-        + '<span class="cl-badge" style="background:' + color + '">' + cell.label + '</span>'
+      tableHtml += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:9px 14px;margin:14px 0 4px;font-size:.86rem;font-weight:600">'
+        + '<span style="background:' + color + ';color:#fff;padding:2px 9px;border-radius:10px;font-size:.71rem">' + cell.label + '</span>'
         + '<span>' + cell.stops.length + ' pincode' + (cell.stops.length!==1?'s':'') + '</span>'
-        + '<span class="state-pill">' + cell.states.join(', ') + '</span>'
-        + (cell.mixed ? '<span class="warn-pill">&#9888; Mixed states</span>' : '')
-        + '<span class="cl-meta"><span>&#128205; avg ' + cell.avgDistKm.toFixed(0) + ' km from origin</span></span>'
+        + '<span style="background:#f1f5f9;color:#64748b;padding:2px 8px;border-radius:6px;font-size:.75rem">' + cell.states.join(', ') + '</span>'
+        + (cell.mixed ? '<span style="background:#fef9c3;color:#713f12;padding:2px 8px;border-radius:6px;font-size:.75rem">&#9888; Mixed states</span>' : '')
+        + '<span style="margin-left:auto;font-size:.78rem;color:#64748b">avg ' + cell.avgDistKm.toFixed(0) + ' km from origin</span>'
         + '</div>';
-      tableHtml += '<div class="tbl-wrap"><table><thead><tr>'
-        + '<th>Pincode</th><th>State</th><th>Dist from Origin (km)</th><th>East-West Offset (km)</th><th>North-South Offset (km)</th>'
+      tableHtml += '<div style="overflow-x:auto;margin-bottom:4px"><table style="width:100%;border-collapse:collapse;font-size:.85rem"><thead><tr>'
+        + '<th style="background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:8px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase">Pincode</th>'
+        + '<th style="background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:8px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase">State</th>'
+        + '<th style="background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:8px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase">Dist (km)</th>'
+        + '<th style="background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:8px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase">E-W Offset</th>'
+        + '<th style="background:#f8fafc;border-bottom:2px solid #e2e8f0;padding:8px 12px;text-align:left;font-weight:600;color:#64748b;font-size:.78rem;text-transform:uppercase">N-S Offset</th>'
         + '</tr></thead><tbody>';
       for (const s of cell.stops.sort((a,b)=>a.distKm-b.distKm)) {
-        tableHtml += '<tr>'
-          + '<td class="mono">'+s.pin+'</td>'
-          + '<td class="dim">'+s.state+'</td>'
-          + '<td class="dim">'+s.distKm.toFixed(1)+'</td>'
-          + '<td class="dim">'+s.dx.toFixed(1)+'</td>'
-          + '<td class="dim">'+s.dy.toFixed(1)+'</td>'
-          + '</tr>';
+        tableHtml += '<tr><td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;font-family:monospace">'+s.pin+'</td>'
+          + '<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;color:#64748b">'+s.state+'</td>'
+          + '<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;color:#64748b">'+s.distKm.toFixed(1)+'</td>'
+          + '<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;color:#64748b">'+s.dx.toFixed(1)+'</td>'
+          + '<td style="padding:7px 12px;border-bottom:1px solid #e2e8f0;color:#64748b">'+s.dy.toFixed(1)+'</td></tr>';
       }
       tableHtml += '</tbody></table></div>';
     }
   }
-  document.getElementById('tableArea').innerHTML = tableHtml;
 
-  const res = document.getElementById('results');
-  res.classList.add('show');
-  res.scrollIntoView({behavior:'smooth', block:'start'});
-  setTimeout(() => renderMap(results, cellKm), 100);
+  openOutputTab(statsHtml, alertHtml, tableHtml, results, cellKm, exportRows, cellSummaryRows, inputRows);
+}
+
+// ── Open results in new tab ───────────────────────────────────────────
+function openOutputTab(statsHtml, alertHtml, tableHtml, results, cellKm, expRows, cellSum, inpRows) {
+  var mapData=JSON.stringify(results.map(function(r){
+    return {originPin:r.originPin,originName:r.originName,oLat:r.oLat,oLng:r.oLng,
+      cells:r.cells.map(function(c){
+        return {label:c.label,baseLabel:c.baseLabel,row:c.row,col:c.col,
+          states:c.states,mixed:c.mixed,avgDistKm:c.avgDistKm,
+          stops:c.stops.map(function(s){return {pin:s.pin,lat:s.lat,lng:s.lng,state:s.state,distKm:s.distKm};})};})};
+  }));
+  var ckm=cellKm;
+  var exRows=JSON.stringify(expRows);
+  var csRows=JSON.stringify(cellSum);
+  var ipRows=JSON.stringify(inpRows);
+
+  var mapScript='var MD='+mapData+',CKM='+ckm+';'
+    +'var COLS=["#0f766e","#2563eb","#dc2626","#d97706","#7c3aed","#0891b2","#be185d","#65a30d","#c2410c","#16a34a","#b45309","#4f46e5"];'
+    +'function gCol(lbl){var h=0;for(var i=0;i<lbl.length;i++)h=(h*31+lbl.charCodeAt(i))>>>0;return COLS[h%COLS.length];}'
+    +'function bCol(row,col){var h=Math.abs(row*92837111^col*689287499);return COLS[h%COLS.length];}'
+    +'function cBounds(oLat,oLng,row,col,km){'
+    +'var dy=row*km,dx=col*km;'
+    +'var latOff=km/111.32,lngOff=km/(111.32*Math.cos(oLat*Math.PI/180));'
+    +'var swLat=oLat+row*latOff,swLng=oLng+col*lngOff;'
+    +'return[[swLat,swLng],[swLat+latOff,swLng+lngOff]];}'
+    +'document.addEventListener("DOMContentLoaded",function(){'
+    +'var map=L.map("map");'
+    +'L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"&copy; OpenStreetMap contributors",maxZoom:18}).addTo(map);'
+    +'var bounds=[],leg="<b style=\'font-size:.8rem;color:#64748b\'>Cells:</b>",seenLeg=new Set(),drawnBoxes=new Map();'
+    +'MD.forEach(function(r){'
+    +'bounds.push([r.oLat,r.oLng]);'
+    +'L.marker([r.oLat,r.oLng],{icon:L.divIcon({className:"",html:"<div style=\'background:#1e293b;color:#fff;border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;font-size:16px;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.4)\'>&#128205;<\/div>",iconSize:[34,34],iconAnchor:[17,17]})}).bindPopup("<b>Origin<\/b><br>"+r.originName+"<br>"+r.originPin).addTo(map);'
+    +'r.cells.forEach(function(cell){'
+    +'var bk=cell.row+"_"+cell.col;'
+    +'if(!drawnBoxes.has(bk))drawnBoxes.set(bk,[]);'
+    +'drawnBoxes.get(bk).push({cell:cell,r:r});});});'
+    +'drawnBoxes.forEach(function(arr){'
+    +'var first=arr[0],c=first.cell,ro=first.r;'
+    +'var rect=cBounds(ro.oLat,ro.oLng,c.row,c.col,CKM);'
+    +'var allSt=[...new Set(arr.flatMap(function(a){return a.cell.states;}))];'
+    +'var totP=arr.reduce(function(s,a){return s+a.cell.stops.length;},0);'
+    +'L.rectangle(rect,{color:bCol(c.row,c.col),weight:1,fillOpacity:0.05,dashArray:"4,3"})'
+    +'.bindPopup("<b>Box "+c.baseLabel+"<\/b><br>"+totP+" pincode(s)<br>States: "+allSt.join(", ")'
+    +'+(arr.length>1?"<br><i>Split into "+arr.length+" groups<\/i>":"")).addTo(map);'
+    +'bounds.push(rect[0],rect[1]);});'
+    +'MD.forEach(function(r){'
+    +'r.cells.forEach(function(cell){'
+    +'var gcolor=gCol(cell.label);'
+    +'var lk=r.originPin+"_"+cell.label;'
+    +'if(!seenLeg.has(lk)){seenLeg.add(lk);leg+="<span style=\'display:inline-flex;align-items:center;gap:4px;font-size:.8rem\'><span style=\'width:11px;height:11px;border-radius:50%;background:"+gcolor+";display:inline-block\'><\/span>"+cell.label+" ("+cell.stops.length+")<\/span>";}  '
+    +'cell.stops.forEach(function(s){'
+    +'bounds.push([s.lat,s.lng]);'
+    +'L.circleMarker([s.lat,s.lng],{radius:5,color:"#fff",weight:1.5,fillColor:gcolor,fillOpacity:0.9})'
+    +'.bindPopup("<b>"+s.pin+"<\/b><br>State: "+s.state+"<br>Cell: "+cell.label+"<br>Dist: "+s.distKm.toFixed(1)+" km").addTo(map);});});});'
+    +'document.getElementById("mapLegend").innerHTML=leg;'
+    +'if(bounds.length)map.fitBounds(bounds,{padding:[32,32]});});';
+
+  var dlScript='var ER='+exRows+',CR='+csRows+',IR='+ipRows+';'
+    +'function dlCSV(){'
+    +'if(typeof XLSX==="undefined"){setTimeout(dlCSV,500);return;}'
+    +'var wb=XLSX.utils.book_new();'
+    // Summary sheet
+    +'var uniqueOrigins=new Set(CR.map(function(r){return r.originPin;})).size;'
+    +'var uniqueStates=new Set(ER.map(function(r){return r.state;})).size;'
+    +'var singleCells=CR.filter(function(r){return r.stateMix==="Single";}).length;'
+    +'var mixedCells=CR.filter(function(r){return r.stateMix==="Mixed";}).length;'
+    +'var pins=CR.map(function(r){return r.pincodeCount;});'
+    +'var maxP=Math.max.apply(null,pins),minP=Math.min.apply(null,pins);'
+    +'var avgP=pins.reduce(function(a,b){return a+b;},0)/pins.length;'
+    +'var topC=CR.reduce(function(a,b){return a.pincodeCount>b.pincodeCount?a:b;});'
+    +'var botC=CR.reduce(function(a,b){return a.pincodeCount<b.pincodeCount?a:b;});'
+    +'var ckm='+ckm+';'
+    +'var sumData=[["Metric","Value"],'
+    +'["Total Pincodes Mapped",ER.length],'
+    +'["Total Cells",CR.length],'
+    +'["Total Origins",uniqueOrigins],'
+    +'["States Covered",uniqueStates],'
+    +'["Single-State Cells",singleCells],'
+    +'["Mixed-State Cells",mixedCells],'
+    +'["Max Pincodes in a Cell",maxP],'
+    +'["Cell with Most Pincodes",topC.cellLabel+" — "+topC.originName+" ("+topC.pincodeCount+")"],'
+    +'["Min Pincodes in a Cell",minP],'
+    +'["Cell with Fewest Pincodes",botC.cellLabel+" — "+botC.originName+" ("+botC.pincodeCount+")"],'
+    +'["Avg Pincodes per Cell",+avgP.toFixed(1)],'
+    +'["Grid Cell Size (km)",ckm],'
+    +'["Cell Area (sq km)",ckm*ckm]];'
+    +'var ws0=XLSX.utils.aoa_to_sheet(sumData);ws0["!cols"]=[{wch:30},{wch:50}];'
+    +'XLSX.utils.book_append_sheet(wb,ws0,"Summary");'
+    // Cell Summary sheet
+    +'var ch=["Origin Pincode","Origin Name","Cell","States","State Mix","Pincode Count","Avg Dist (km)","NW Lat","NW Lng","NE Lat","NE Lng","SE Lat","SE Lng","SW Lat","SW Lng"];'
+    +'var cs=CR.map(function(r){return[r.originPin,r.originName,r.cellLabel,r.states,r.stateMix,r.pincodeCount,r.avgDistKm,r.nwLat,r.nwLng,r.neLat,r.neLng,r.seLat,r.seLng,r.swLat,r.swLng];});'
+    +'var ws1=XLSX.utils.aoa_to_sheet([ch].concat(cs));'
+    +'ws1["!cols"]=[{wch:14},{wch:16},{wch:12},{wch:24},{wch:12},{wch:14},{wch:14},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];'
+    +'XLSX.utils.book_append_sheet(wb,ws1,"Cell Summary");'
+    // Pincode Detail sheet
+    +'var dh=["Origin Pincode","Origin Name","Cell","Pincode","State","Dist (km)","E-W Offset (km)","N-S Offset (km)"];'
+    +'var dr=ER.map(function(r){return[r.originPin,r.originName,r.cellLabel,r.pincode,r.state,r.distKm,r.dxKm,r.dyKm];});'
+    +'var ws2=XLSX.utils.aoa_to_sheet([dh].concat(dr));'
+    +'ws2["!cols"]=[{wch:14},{wch:16},{wch:12},{wch:12},{wch:18},{wch:12},{wch:18},{wch:18}];'
+    +'XLSX.utils.book_append_sheet(wb,ws2,"Pincode Detail");'
+    // Input Data sheet
+    +'var ih=["Origin Pincode","Origin Name","Destination Pincode"];'
+    +'var ir=IR.map(function(r){return[r.originPin,r.originName,r.destPin];});'
+    +'var ws3=XLSX.utils.aoa_to_sheet([ih].concat(ir));'
+    +'ws3["!cols"]=[{wch:16},{wch:20},{wch:22}];'
+    +'XLSX.utils.book_append_sheet(wb,ws3,"Input Data");'
+    +'XLSX.writeFile(wb,"cluster_grid_output.xlsx");}';
+
+  var css='*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}'
+    +'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:24px 16px 64px}'
+    +'.wrap{max-width:960px;margin:0 auto}'
+    +'.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px}'
+    +'h1{font-size:1.5rem;font-weight:700}'
+    +'.dl{padding:10px 22px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer}'
+    +'.dl:hover{background:#15803d}'
+    +'.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}'
+    +'.stat{background:#f0fdfa;border-radius:8px;padding:12px 16px;text-align:center;flex:1;min-width:100px}'
+    +'.stat-n{font-size:1.4rem;font-weight:700;color:#0f766e}'
+    +'.stat-l{font-size:.76rem;color:#64748b;margin-top:2px}'
+    +'#map{height:480px;border-radius:10px;margin-bottom:12px;border:1px solid #e2e8f0}'
+    +'.map-legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;font-size:.8rem}'
+    +'.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:18px}'
+    +'.al{padding:10px 14px;border-radius:8px;font-size:.84rem;margin-bottom:12px}'
+    +'.al-warn{background:#fef9c3;border:1px solid #fde047;color:#713f12}';
+
+  var html='<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>'
+    +'<meta name="viewport" content="width=device-width,initial-scale=1.0"/>'
+    +'<title>Cluster Grid — Results</title>'
+    +'<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>'
+    +'<style>'+css+'</style></head><body><div class="wrap">'
+    +'<div class="top"><h1>&#9638; Cluster Grid — Results</h1>'
+    +'<button class="dl" onclick="dlCSV()">&#11015; Download Excel</button></div>'
+    +alertHtml
+    +'<div class="stats">'+statsHtml+'</div>'
+    +'<div id="map"></div><div class="map-legend" id="mapLegend"></div>'
+    +'<div class="card">'+tableHtml+'</div>'
+    +'</div>'
+    +'<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>'
+    +'<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"><\/script>'
+    +'<script>'+mapScript+dlScript+'<\/script>'
+    +'</body></html>';
+
+  var blob=new Blob([html],{type:'text/html'});
+  window.open(URL.createObjectURL(blob),'_blank');
 }
 
 // ── Excel download ──────────────────────────────────────────────────────
