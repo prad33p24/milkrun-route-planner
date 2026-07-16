@@ -219,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its geographic grid cell (row, col) relative to the origin using the Grid Cell Size. Oversized cells are split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops are split. <strong>Phase 2.5</strong> — 5 passes of centroid refinement: each stop migrates to the nearest cluster centroid within its grid neighbourhood, correcting stops that span multiple cells. <strong>Phase 3</strong> — small clusters (below Min&nbsp;Pincodes or Min&nbsp;Drops) merge into the nearest grid-adjacent neighbour (radius&nbsp;1, widening to&nbsp;2). Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -672,31 +672,30 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
     if (small.length === 0) break;
 
     if (ok.length === 0) {
-      // All clusters are small — group by bearing instead of merging blindly.
-      // Sort by bearing from origin, then chain-merge adjacent clusters within ±90°.
-      const byB = small
-        .map(cl => {
-          const lat = cl.reduce((s,p) => s+p.lat,0)/cl.length;
-          const lng = cl.reduce((s,p) => s+p.lng,0)/cl.length;
-          return {cl, b: bearing(oLat, oLng, lat, lng)};
-        })
-        .sort((a, b) => a.b - b.b);
-
-      let current = [...byB[0].cl];
-      const grouped = [];
-      for (let i = 1; i < byB.length; i++) {
-        const cLat = current.reduce((s,p)=>s+p.lat,0)/current.length;
-        const cLng = current.reduce((s,p)=>s+p.lng,0)/current.length;
-        const cB   = bearing(oLat, oLng, cLat, cLng);
-        if (angularDiff(cB, byB[i].b) <= 90 && current.length + byB[i].cl.length <= maxPins) {
-          current.push(...byB[i].cl);
-        } else {
-          grouped.push(current);
-          current = [...byB[i].cl];
+      // All clusters small — merge only grid-adjacent ones (radius 1).
+      // Chain-merge: repeatedly find any two adjacent clusters that fit within
+      // maxPins and merge them, until no more adjacent pairs remain.
+      let groups = small.map(cl => [...cl]);
+      let anyMerged = true;
+      while (anyMerged) {
+        anyMerged = false;
+        for (let i = 0; i < groups.length && !anyMerged; i++) {
+          if (!groups[i].length) continue;
+          const gCell = clGridCell(groups[i], oLat, oLng, cellKm);
+          for (let j = i + 1; j < groups.length; j++) {
+            if (!groups[j].length) continue;
+            const hCell = clGridCell(groups[j], oLat, oLng, cellKm);
+            if (Math.abs(gCell.row - hCell.row) <= 1 && Math.abs(gCell.col - hCell.col) <= 1
+                && groups[i].length + groups[j].length <= maxPins) {
+              groups[i].push(...groups[j]);
+              groups[j] = [];
+              anyMerged = true;
+              break;
+            }
+          }
         }
       }
-      grouped.push(current);
-      return grouped.filter(c => c.length > 0);
+      return groups.filter(c => c.length > 0);
     }
 
     for (const sm of small) {
@@ -704,22 +703,20 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
       const smLng = sm.reduce((s,p)=>s+p.lng,0)/sm.length;
       const smCell = clGridCell(sm, oLat, oLng, cellKm);
 
-      // Try immediate grid neighbours (radius 1 = 8-cell Moore neighbourhood) first,
-      // then widen to radius 2. Adjacent cells can't have another cluster between them
-      // by definition, so this naturally prevents cross-cluster jumps.
+      // Only merge into an immediately adjacent grid cell (Moore neighbourhood, radius 1).
+      // No fallback to radius 2 — a cluster with no adjacent neighbour becomes an orphan.
       let target = null;
-      for (const radius of [1, 2]) {
+      {
         let bestDist = Infinity;
         for (const cl of ok) {
           const clCell = clGridCell(cl, oLat, oLng, cellKm);
-          if (Math.abs(smCell.row - clCell.row) > radius) continue;
-          if (Math.abs(smCell.col - clCell.col) > radius) continue;
+          if (Math.abs(smCell.row - clCell.row) > 1) continue;
+          if (Math.abs(smCell.col - clCell.col) > 1) continue;
           const d = distRaw(smLat, smLng,
             cl.reduce((s,p)=>s+p.lat,0)/cl.length,
             cl.reduce((s,p)=>s+p.lng,0)/cl.length);
           if (d < bestDist) { bestDist = d; target = cl; }
         }
-        if (target) break;
       }
 
       if (!target) {
@@ -741,65 +738,6 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
   return result.filter(c => c.length > 0);
 }
 
-// ── Phase 2.5: Iterative centroid refinement ─────────────────────────
-// Runs up to 5 passes of nearest-centroid reassignment.
-// Each stop may migrate to any cluster whose centroid falls within 1 grid
-// cell of the stop's own grid cell and is closer than the current centroid.
-// After each pass, clusters that grew beyond maxPins are re-split.
-// This corrects the initial ring+sector bucketing so stops 100s of km apart
-// that landed in the same bucket end up in separate, tighter clusters.
-function refineByNearestCentroid(clusters, oLat, oLng, maxPins, cellKm) {
-  const cosLat = Math.cos(oLat * DEG);
-
-  function cent(cl) {
-    return {lat: cl.reduce((s,p)=>s+p.lat,0)/cl.length, lng: cl.reduce((s,p)=>s+p.lng,0)/cl.length};
-  }
-  function cellOf(lat, lng) {
-    return {
-      row: Math.floor((lat - oLat) * KM_PER_DEG_LAT / cellKm),
-      col: Math.floor((lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm)
-    };
-  }
-
-  let cur = clusters.map(cl => [...cl]);
-
-  for (let iter = 0; iter < 5; iter++) {
-    const cents  = cur.map(cent);
-    const cCells = cents.map(c => cellOf(c.lat, c.lng));
-    const next   = cur.map(() => []);
-    let moved    = false;
-
-    for (let ci = 0; ci < cur.length; ci++) {
-      for (const stop of cur[ci]) {
-        const sc = cellOf(stop.lat, stop.lng);
-        let bestJ = ci, bestD = distRaw(stop.lat, stop.lng, cents[ci].lat, cents[ci].lng);
-
-        for (let j = 0; j < cur.length; j++) {
-          if (j === ci) continue;
-          // Target centroid must be within 1 grid cell of this stop's own cell
-          if (Math.abs(sc.row - cCells[j].row) > 1 || Math.abs(sc.col - cCells[j].col) > 1) continue;
-          const d = distRaw(stop.lat, stop.lng, cents[j].lat, cents[j].lng);
-          if (d < bestD) { bestD = d; bestJ = j; }
-        }
-
-        if (bestJ !== ci) moved = true;
-        next[bestJ].push(stop);
-      }
-    }
-
-    // Re-split any cluster that grew beyond maxPins after reassignment
-    const split = [];
-    for (const cl of next) {
-      if (!cl.length) continue;
-      if (cl.length <= maxPins) split.push(cl);
-      else for (const sub of dirSplit(cl, oLat, oLng, maxPins)) split.push(sub);
-    }
-    cur = split;
-    if (!moved) break;
-  }
-
-  return cur;
-}
 
 // ── Nearest-Neighbour tour ────────────────────────────────────────────
 function nearestNeighbour(oLat, oLng, stops) {
@@ -898,15 +836,13 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
-  // Phase 1: geography-only clustering (maxPins hard cap)
-  // Phase 2: split any cluster whose slot-weight sum exceeds maxDrops
-  // Phase 2.5: 5-pass centroid refinement — stops migrate to nearest grid-adjacent centroid
-  // Phase 3: merge remaining small clusters using grid-cell adjacency
-  const geoClusters     = gridCluster(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins);
-  const dropClusters    = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
-  const refinedClusters = refineByNearestCentroid(dropClusters, oLat, oLng, cfg.maxPins, cfg.cellKm);
-  const clusters        = enforceMinClusterSize(
-    refinedClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng, cfg.cellKm
+  // Phase 1: grid-cell bucketing — each stop to its exact (row,col) cell
+  // Phase 2: split cells exceeding maxDrops slot-weight
+  // Phase 3: merge small clusters into grid-adjacent neighbours only (radius 1, no fallback)
+  const geoClusters  = gridCluster(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins);
+  const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
+  const clusters     = enforceMinClusterSize(
+    dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng, cfg.cellKm
   );
 
   // Recompute slot weights using cluster-specific avg trips/year
