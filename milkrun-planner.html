@@ -696,13 +696,39 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
       const smLat = sm.reduce((s, p) => s + p.lat, 0) / sm.length;
       const smLng = sm.reduce((s, p) => s + p.lng, 0) / sm.length;
       const smB   = clBearing(sm);
+      const smD   = distRaw(oLat, oLng, smLat, smLng);
+
+      // Returns true if any other ok cluster sits radially + angularly between sm and candidate.
+      // Prevents merging across clusters that already occupy the space between them.
+      function blockedBy(candidate) {
+        const tgLat = candidate.reduce((s,p)=>s+p.lat,0)/candidate.length;
+        const tgLng = candidate.reduce((s,p)=>s+p.lng,0)/candidate.length;
+        const tgD   = distRaw(oLat, oLng, tgLat, tgLng);
+        const tgB   = bearing(oLat, oLng, tgLat, tgLng);
+        const minD  = Math.min(smD, tgD), maxD = Math.max(smD, tgD);
+        const aToB  = ((tgB - smB + 360) % 360);
+        for (const other of ok) {
+          if (other === candidate || other === sm) continue;
+          const otLat = other.reduce((s,p)=>s+p.lat,0)/other.length;
+          const otLng = other.reduce((s,p)=>s+p.lng,0)/other.length;
+          const otD   = distRaw(oLat, oLng, otLat, otLng);
+          if (otD <= minD || otD >= maxD) continue;
+          const otB   = bearing(oLat, oLng, otLat, otLng);
+          const aToOt = ((otB - smB + 360) % 360);
+          const between = aToB <= 180 ? (aToOt > 0 && aToOt < aToB) : (aToOt > aToB);
+          if (between) return true;
+        }
+        return false;
+      }
 
       // Try ±45° first, then widen to ±90°. Beyond 90° we don't merge — wrong direction.
+      // Skip any candidate that has another cluster sitting between it and sm.
       let target = null;
       for (const maxAngle of [45, 90]) {
         let bestDist = Infinity;
         for (const cl of ok) {
           if (angularDiff(smB, clBearing(cl)) > maxAngle) continue;
+          if (blockedBy(cl)) continue;
           const d = distRaw(smLat, smLng,
             cl.reduce((s,p) => s+p.lat, 0)/cl.length,
             cl.reduce((s,p) => s+p.lng, 0)/cl.length);
@@ -712,7 +738,7 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
       }
 
       if (!target) {
-        // No same-direction cluster within 90° — keep as isolated orphan
+        // No reachable same-direction cluster within 90° — keep as isolated orphan
         orphaned.add(sm);
         ok.push(sm);
         continue;
