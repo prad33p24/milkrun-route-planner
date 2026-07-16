@@ -219,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings + dynamic sectors</strong> (sector count scales with stop density so each bucket targets &#8804;&nbsp;Max&nbsp;Pincodes stops). Small clusters (below Min&nbsp;Pincodes <em>or</em> Min&nbsp;Drops) are merged into the nearest cluster within the same <strong>grid cell neighbourhood</strong> — only grid-adjacent cells (radius&nbsp;1, widening to&nbsp;2 if needed) are eligible, so merges never jump across intervening clusters. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its geographic grid cell (row, col) relative to the origin using the Grid Cell Size. Oversized cells are split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops are split. <strong>Phase 2.5</strong> — 5 passes of centroid refinement: each stop migrates to the nearest cluster centroid within its grid neighbourhood, correcting stops that span multiple cells. <strong>Phase 3</strong> — small clusters (below Min&nbsp;Pincodes or Min&nbsp;Drops) merge into the nearest grid-adjacent neighbour (radius&nbsp;1, widening to&nbsp;2). Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -599,35 +599,26 @@ function dirSplit(stops, oLat, oLng, maxCount) {
   return result;
 }
 
-// ── Phase 1: Geographic clustering (direction + distance, no kMeans) ──
-function hybridCluster(stops, oLat, oLng, maxPins) {
-  // Dynamic sectors: double until each bucket ≤ maxPins stops
-  const ringCounts = new Array(RING_KM.length).fill(0);
-  for (const stop of stops) ringCounts[getRing(distRaw(oLat, oLng, stop.lat, stop.lng))]++;
-  const dynSectors = ringCounts.map(count => {
-    if (count <= maxPins) return 4;
-    let s = 4;
-    while (count / s > maxPins) s *= 2;
-    return s;
-  });
-
-  // Bucket by ring + sector, then within each bucket sort by bearing→distance
-  // and split sequentially — routes flow outward in one direction, no zigzag
+// ── Phase 1: Grid-cell clustering ────────────────────────────────────
+// Each stop is assigned to its (row, col) grid cell relative to the origin
+// using the same flat-earth formula as district-mapper. Stops that share a
+// cell form one initial cluster. Oversized cells are split by bearing+distance
+// so stops within a cell still route outward in a clean direction.
+function gridCluster(stops, oLat, oLng, cellKm, maxPins) {
+  const cosLat = Math.cos(oLat * DEG);
   const buckets = new Map();
   for (const stop of stops) {
-    const km   = distRaw(oLat, oLng, stop.lat, stop.lng);
-    const ring = getRing(km);
-    const nSec = dynSectors[ring];
-    const b    = bearing(oLat, oLng, stop.lat, stop.lng);
-    const key  = ring + '_' + Math.floor(b / (360 / nSec));
+    const row = Math.floor((stop.lat - oLat) * KM_PER_DEG_LAT / cellKm);
+    const col = Math.floor((stop.lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm);
+    const key = row + '_' + col;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(stop);
   }
-
   const clusters = [];
   for (const bucket of buckets.values()) {
     if (!bucket.length) continue;
-    for (const cl of dirSplit(bucket, oLat, oLng, maxPins)) clusters.push(cl);
+    if (bucket.length <= maxPins) clusters.push(bucket);
+    else for (const cl of dirSplit(bucket, oLat, oLng, maxPins)) clusters.push(cl);
   }
   return clusters.filter(c => c.length > 0);
 }
@@ -911,7 +902,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
   // Phase 2: split any cluster whose slot-weight sum exceeds maxDrops
   // Phase 2.5: 5-pass centroid refinement — stops migrate to nearest grid-adjacent centroid
   // Phase 3: merge remaining small clusters using grid-cell adjacency
-  const geoClusters     = hybridCluster(rawStops, oLat, oLng, cfg.maxPins);
+  const geoClusters     = gridCluster(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins);
   const dropClusters    = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
   const refinedClusters = refineByNearestCentroid(dropClusters, oLat, oLng, cfg.maxPins, cfg.cellKm);
   const clusters        = enforceMinClusterSize(
