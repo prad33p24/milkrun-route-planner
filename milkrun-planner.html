@@ -639,15 +639,18 @@ function splitByDrops(clusters, maxDrops, maxPins, oLat, oLng) {
 // ── Minimum cluster size enforcement ─────────────────────────────────
 function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops, oLat, oLng, cellKm) {
   deviationStops = deviationStops || 0;
-  const orphaned = new Set(); // clusters with no direction-compatible merge target
+  const orphaned = new Set();
 
-  function clBearing(cl) {
-    const lat = cl.reduce((s, p) => s + p.lat, 0) / cl.length;
-    const lng = cl.reduce((s, p) => s + p.lng, 0) / cl.length;
-    return bearing(oLat, oLng, lat, lng);
+  // Distance ring of a cluster's centroid from origin (uses global RING_KM / getRing).
+  function clRing(cl) {
+    const lat = cl.reduce((s,p)=>s+p.lat,0)/cl.length;
+    const lng = cl.reduce((s,p)=>s+p.lng,0)/cl.length;
+    return getRing(distRaw(oLat, oLng, lat, lng));
   }
-  function angularDiff(a, b) {
-    return Math.abs(((a - b + 540) % 360) - 180); // 0–180
+  // Two clusters are ring-compatible if their distance bands are the same or adjacent.
+  // Prevents a short-haul cluster (≤100 km) from absorbing a long-haul one (≥200 km).
+  function ringCompatible(clA, clB) {
+    return Math.abs(clRing(clA) - clRing(clB)) <= 1;
   }
 
   function isSmall(cl) {
@@ -686,7 +689,8 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
             if (!groups[j].length) continue;
             const hCell = clGridCell(groups[j], oLat, oLng, cellKm);
             if (Math.abs(gCell.row - hCell.row) <= 1 && Math.abs(gCell.col - hCell.col) <= 1
-                && groups[i].length + groups[j].length <= maxPins) {
+                && groups[i].length + groups[j].length <= maxPins
+                && ringCompatible(groups[i], groups[j])) {
               groups[i].push(...groups[j]);
               groups[j] = [];
               anyMerged = true;
@@ -712,6 +716,7 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
           const clCell = clGridCell(cl, oLat, oLng, cellKm);
           if (Math.abs(smCell.row - clCell.row) > 1) continue;
           if (Math.abs(smCell.col - clCell.col) > 1) continue;
+          if (!ringCompatible(sm, cl)) continue;
           const d = distRaw(smLat, smLng,
             cl.reduce((s,p)=>s+p.lat,0)/cl.length,
             cl.reduce((s,p)=>s+p.lng,0)/cl.length);
