@@ -252,6 +252,7 @@ const geoMap = new Map(Object.entries(GEO_RAW).map(([k,[a,b]]) => [k, {lat:a, ln
 let filePins      = [];          // [{pin, weight, shipmentsPerYear}] — single-origin mode
 let fileOriginMap = new Map();   // Map<originPin, stops[]> — multi-origin mode
 let originNameMap = new Map();   // Map<originPin, originName>
+let originSpeedMap = new Map();  // Map<originPin, speedKmh>
 let isMultiOrigin = false;
 let exportRows    = [];
 let clusterSummary = [];
@@ -276,15 +277,15 @@ function downloadTemplate() {
   const oName  = document.getElementById('originName').value.trim() || 'Hub1';
   const wb = XLSX.utils.book_new();
   const data = [
-    ['Origin Name', 'Origin Pincode', 'Destination Pincode', 'Avg Weight per Shipment (kg)', 'Shipments per Year'],
-    [oName,    origin,   '515402', 150, 200],
-    [oName,    origin,   '515408', 200, 100],
-    [oName,    origin,   '515413', 120,  52],
-    ['Hub2', '503321', '515201', 100,  30],
-    ['Hub2', '503321', '515211',  75,  78],
+    ['Origin Name', 'Origin Pincode', 'Destination Pincode', 'Avg Weight per Shipment (kg)', 'Shipments per Year', 'Speed (km/h)'],
+    [oName,    origin,   '515402', 150, 200, 45],
+    [oName,    origin,   '515408', 200, 100, 45],
+    [oName,    origin,   '515413', 120,  52, 45],
+    ['Hub2', '503321', '515201', 100,  30, 40],
+    ['Hub2', '503321', '515211',  75,  78, 40],
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}, {wch:30}, {wch:22}];
+  ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}, {wch:30}, {wch:22}, {wch:14}];
   XLSX.utils.book_append_sheet(wb, ws, 'Milkrun Input');
   XLSX.writeFile(wb, 'milkrun_input_template.xlsb', {bookType: 'xlsb'});
 }
@@ -309,6 +310,7 @@ function loadFile(file) {
   const apply = parsed => {
     hasWeightData = parsed.hasWeight;
     originNameMap = parsed.originNameMap || new Map();
+    originSpeedMap = parsed.originSpeedMap || new Map();
     if (parsed.isMulti) {
       isMultiOrigin = true;
       fileOriginMap = parsed.originMap;
@@ -355,9 +357,9 @@ function parseTemplate(text) {
 
   const h = lines[0].split(',').map(c => c.trim().toLowerCase());
 
-  // New 5-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year
+  // New 6-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year | Speed (km/h)
   if (/name/i.test(h[0]) && /origin.*pin|^origin$/i.test(h[1])) {
-    const originMap = new Map(), nameMap = new Map();
+    const originMap = new Map(), nameMap = new Map(), speedMap = new Map();
     let hasWeight = false;
     for (let i = 1; i < lines.length; i++) {
       const parts = lines[i].split(',');
@@ -367,12 +369,14 @@ function parseTemplate(text) {
       if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
       const weight           = parseFloat(parts[3]) || 0;
       const shipmentsPerYear = parseFloat(parts[4]) || 0;
+      const speed            = parseFloat(parts[5]) || 0;
       if (weight > 0) hasWeight = true;
       if (origName) nameMap.set(origPin, origName);
+      if (speed > 0 && !speedMap.has(origPin)) speedMap.set(origPin, speed);
       if (!originMap.has(origPin)) originMap.set(origPin, []);
       originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
     }
-    return {isMulti: true, originMap, originNameMap: nameMap, hasWeight};
+    return {isMulti: true, originMap, originNameMap: nameMap, originSpeedMap: speedMap, hasWeight};
   }
 
   // Old 4-col format (backward compat): Origin Pincode | Dest Pincode | Weight | Freq/wk
@@ -421,9 +425,9 @@ function parseTemplateRows(rows) {
   const h0 = String(rows[0][0] || '').trim().toLowerCase();
   const h1 = String(rows[0][1] || '').trim().toLowerCase();
 
-  // New 5-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year
+  // New 6-col format: Origin Name | Origin Pincode | Dest Pincode | Avg Weight | Shipments/Year | Speed (km/h)
   if (/name/i.test(h0) && /origin.*pin|^origin$/i.test(h1)) {
-    const originMap = new Map(), nameMap = new Map();
+    const originMap = new Map(), nameMap = new Map(), speedMap = new Map();
     let hasWeight = false;
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
@@ -433,12 +437,14 @@ function parseTemplateRows(rows) {
       if (!/^[1-9]\d{5}$/.test(origPin) || !/^[1-9]\d{5}$/.test(destPin)) continue;
       const weight           = parseFloat(row[3]) || 0;
       const shipmentsPerYear = parseFloat(row[4]) || 0;
+      const speed            = parseFloat(row[5]) || 0;
       if (weight > 0) hasWeight = true;
       if (origName) nameMap.set(origPin, origName);
+      if (speed > 0 && !speedMap.has(origPin)) speedMap.set(origPin, speed);
       if (!originMap.has(origPin)) originMap.set(origPin, []);
       originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
     }
-    return {isMulti: true, originMap, originNameMap: nameMap, hasWeight};
+    return {isMulti: true, originMap, originNameMap: nameMap, originSpeedMap: speedMap, hasWeight};
   }
 
   // Old 4-col format (backward compat): Origin Pincode | Dest Pincode | Weight | Freq/wk
@@ -484,6 +490,7 @@ document.getElementById('pcArea').addEventListener('input', () => {
   filePins = [];
   fileOriginMap = new Map();
   originNameMap = new Map();
+  originSpeedMap = new Map();
   isMultiOrigin = false;
   hasWeightData = false;
   document.getElementById('pcOk').style.display = 'none';
@@ -1024,6 +1031,10 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     const delivLegs = tour.map(t=>t.leg);
     const retKm = returnToOrig && tour.length>0 ? distRoad(tour[tour.length-1].lat,tour[tour.length-1].lng,oLat,oLng) : 0;
     const allLegs = returnToOrig ? [...delivLegs, retKm] : delivLegs;
+    const firstLegKm = delivLegs.length > 0 ? delivLegs[0] : 0;
+    const midLegs = delivLegs.slice(1);
+    const avgMidLeg = midLegs.length > 0 ? midLegs.reduce((a,b)=>a+b,0)/midLegs.length : 0;
+    const firstLastSum = firstLegKm + retKm;
     const totalTATHrs = hasTime ? Math.round(cumTimeMins/60) : '';
     summaryRows.push({
       origin: originPin, originName, name: clusterLabel,
@@ -1032,6 +1043,8 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       cumDist: cum.toFixed(2),
       maxLeg: allLegs.length ? Math.max(...allLegs).toFixed(2) : '0',
       avgLeg: allLegs.length ? (allLegs.reduce((a,b)=>a+b,0)/allLegs.length).toFixed(2) : '0',
+      avgMidLeg: avgMidLeg.toFixed(2),
+      firstLastSum: firstLastSum.toFixed(2),
       totalWeight: clusterRawWt||'',
       avgWeightPerTrip: showWeight && weightPerTrip>0 ? Math.round(weightPerTrip) : '',
       totalTATHrs, flag
@@ -1086,13 +1099,16 @@ function compute() {
   for (const [originPin, destPins] of originGroups) {
     if (!geoMap.has(originPin)) { allNotFound.push(originPin+' (origin not found)'); continue; }
     if (!destPins.length) continue;
+    const oSpeed = originSpeedMap.get(originPin);
+    const effSpeed = oSpeed > 0 ? oSpeed : cfg.speedKmh;
+    const origCfg = {...cfg, speedKmh: effSpeed, hasTime: effSpeed>0 || cfg.timeAtStopMins>0 || cfg.timeAtOrigMins>0};
 
     if (originGroups.size > 1) {
       const oLabel = (originNameMap.get(originPin)||'') ? originNameMap.get(originPin) + ' (' + originPin + ')' : originPin;
       allTableHtml += '<div style="margin:24px 0 8px;padding:10px 16px;background:var(--teal-lt);border:1px solid #5eead4;border-radius:8px;font-weight:700;font-size:.95rem;color:var(--teal);">&#128204; Origin: ' + oLabel + '</div>';
     }
 
-    const r = processOrigin(originPin, destPins, cfg, colorOffset);
+    const r = processOrigin(originPin, destPins, origCfg, colorOffset);
     allTableHtml     += r.tableHtml;
     exportRows.push(...r.detailRows);
     clusterSummary.push(...r.summaryRows);
@@ -1129,18 +1145,19 @@ function dlCSV() {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Cluster Summary
-  const sumHeaders = ['Origin Pincode','Origin Name','Cluster','Max Pincodes','Avg Drops/Trip','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Total Weight (kg)','Avg Weight/Trip (kg)','Total TAT (hrs)','Status'];
+  const sumHeaders = ['Origin Pincode','Origin Name','Cluster','Max Pincodes','Avg Drops/Trip','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Avg Mid-Leg (km)','First+Last Leg (km)','Total Weight (kg)','Avg Weight/Trip (kg)','Total TAT (hrs)','Status'];
   const sumRows = clusterSummary.map(s => [
     s.origin, s.originName||'', s.name, s.stops,
     s.avgDropsPerTrip!==''?+s.avgDropsPerTrip:'',
     +s.cumDist, +s.maxLeg, +s.avgLeg,
+    +s.avgMidLeg, +s.firstLastSum,
     s.totalWeight!==''?+s.totalWeight:'',
     s.avgWeightPerTrip!==''?+s.avgWeightPerTrip:'',
     s.totalTATHrs!==''?+s.totalTATHrs:'',
     s.flag||''
   ]);
   const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
-  ws1['!cols'] = [{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:20},{wch:22},{wch:16},{wch:16}];
+  ws1['!cols'] = [{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:18},{wch:20},{wch:20},{wch:22},{wch:16},{wch:16}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
 
   // Sheet 2: Route Details
@@ -1199,13 +1216,14 @@ function openOutputTab(statsHtml, alertHtml, tableHtml, tourGroups, expRows, clu
     +'function dlCSV(){'
     +'if(typeof XLSX==="undefined"){setTimeout(dlCSV,500);return;}'
     +'var wb=XLSX.utils.book_new();'
-    +'var sh=["Origin Pincode","Origin Name","Cluster","Max Pincodes","Avg Drops/Trip","Cumulative Dist (km)","Max Leg (km)","Avg Leg (km)","Total Weight (kg)","Avg Weight/Trip (kg)","Total TAT (hrs)","Status"];'
+    +'var sh=["Origin Pincode","Origin Name","Cluster","Max Pincodes","Avg Drops/Trip","Cumulative Dist (km)","Max Leg (km)","Avg Leg (km)","Avg Mid-Leg (km)","First+Last Leg (km)","Total Weight (kg)","Avg Weight/Trip (kg)","Total TAT (hrs)","Status"];'
     +'var sr=CS.map(function(s){return[s.origin,s.originName||"",s.name,s.stops,'
     +'s.avgDropsPerTrip!==""?+s.avgDropsPerTrip:"",+s.cumDist,+s.maxLeg,+s.avgLeg,'
+    +'+s.avgMidLeg,+s.firstLastSum,'
     +'s.totalWeight!==""?+s.totalWeight:"",s.avgWeightPerTrip!==""?+s.avgWeightPerTrip:"",'
     +'s.totalTATHrs!==""?+s.totalTATHrs:"",s.flag||""];});'
     +'var ws1=XLSX.utils.aoa_to_sheet([sh].concat(sr));'
-    +'ws1["!cols"]=[{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:20},{wch:22},{wch:16},{wch:16}];'
+    +'ws1["!cols"]=[{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:18},{wch:20},{wch:20},{wch:22},{wch:16},{wch:16}];'
     +'XLSX.utils.book_append_sheet(wb,ws1,"Clusters");'
     +'var dh=["Origin","Cluster","Visit #","From Pincode","To Pincode","Leg (km)","Cumulative (km)","Avg Weight/Shipment (kg)","Shipments/Year","Slot Weight","Cumul. Wt/Trip (kg)","Travel Time (min)","Service Time (min)","Cumul. Time (hrs)"];'
     +'var dr=ER.map(function(r){return[r.origin,r.cluster,r.visit,r.from,r.to,+r.leg,+r.cum,'
