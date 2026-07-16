@@ -189,6 +189,10 @@
         <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(extra stops allowed when merging small clusters)</span></label>
         <input type="number" id="deviationStops" value="1" min="0" max="10" />
       </div>
+      <div>
+        <label>Grid Cell Size (km) <span class="opt">merge adjacency radius</span></label>
+        <input type="number" id="cellKm" value="100" min="10" max="2000" step="10" />
+      </div>
     </div>
     <div class="row2" style="margin-top:4px;margin-bottom:4px;">
       <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
@@ -215,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings</strong> with <strong>dynamic sectors</strong> (sector count scales with stop density per ring so each bucket targets &#8804;&nbsp;Max&nbsp;Drops stops). <strong>K-Means</strong> refines within each bucket. Small clusters (below Min&nbsp;Pincodes <em>or</em> Min&nbsp;Drops) are merged into their nearest neighbour. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> Stops are bucketed into <strong>polar rings + dynamic sectors</strong> (sector count scales with stop density so each bucket targets &#8804;&nbsp;Max&nbsp;Pincodes stops). Small clusters (below Min&nbsp;Pincodes <em>or</em> Min&nbsp;Drops) are merged into the nearest cluster within the same <strong>grid cell neighbourhood</strong> — only grid-adjacent cells (radius&nbsp;1, widening to&nbsp;2 if needed) are eligible, so merges never jump across intervening clusters. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -541,6 +545,18 @@ function distRoad(lat1, lng1, lat2, lng2) {
   return distRaw(lat1, lng1, lat2, lng2) * 1.3;
 }
 
+const KM_PER_DEG_LAT = 111.32;
+
+// Flat-earth grid cell of a cluster centroid relative to origin.
+// Returns {row, col} — integer grid address in cellKm-sized steps.
+function clGridCell(cl, oLat, oLng, cellKm) {
+  const lat = cl.reduce((s,p)=>s+p.lat,0)/cl.length;
+  const lng = cl.reduce((s,p)=>s+p.lng,0)/cl.length;
+  const dy = (lat - oLat) * KM_PER_DEG_LAT;
+  const dx = (lng - oLng) * KM_PER_DEG_LAT * Math.cos(oLat * DEG);
+  return {row: Math.floor(dy/cellKm), col: Math.floor(dx/cellKm)};
+}
+
 function bearing(lat1, lng1, lat2, lng2) {
   const dL = (lng2-lng1)*DEG;
   const y  = Math.sin(dL)*Math.cos(lat2*DEG);
@@ -630,7 +646,7 @@ function splitByDrops(clusters, maxDrops, maxPins, oLat, oLng) {
 }
 
 // ── Minimum cluster size enforcement ─────────────────────────────────
-function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops, oLat, oLng) {
+function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops, oLat, oLng, cellKm) {
   deviationStops = deviationStops || 0;
   const orphaned = new Set(); // clusters with no direction-compatible merge target
 
@@ -693,52 +709,30 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
     }
 
     for (const sm of small) {
-      const smLat = sm.reduce((s, p) => s + p.lat, 0) / sm.length;
-      const smLng = sm.reduce((s, p) => s + p.lng, 0) / sm.length;
-      const smB   = clBearing(sm);
-      const smD   = distRaw(oLat, oLng, smLat, smLng);
+      const smLat = sm.reduce((s,p)=>s+p.lat,0)/sm.length;
+      const smLng = sm.reduce((s,p)=>s+p.lng,0)/sm.length;
+      const smCell = clGridCell(sm, oLat, oLng, cellKm);
 
-      // Returns true if any other ok cluster sits radially + angularly between sm and candidate.
-      // Prevents merging across clusters that already occupy the space between them.
-      function blockedBy(candidate) {
-        const tgLat = candidate.reduce((s,p)=>s+p.lat,0)/candidate.length;
-        const tgLng = candidate.reduce((s,p)=>s+p.lng,0)/candidate.length;
-        const tgD   = distRaw(oLat, oLng, tgLat, tgLng);
-        const tgB   = bearing(oLat, oLng, tgLat, tgLng);
-        const minD  = Math.min(smD, tgD), maxD = Math.max(smD, tgD);
-        const aToB  = ((tgB - smB + 360) % 360);
-        for (const other of ok) {
-          if (other === candidate || other === sm) continue;
-          const otLat = other.reduce((s,p)=>s+p.lat,0)/other.length;
-          const otLng = other.reduce((s,p)=>s+p.lng,0)/other.length;
-          const otD   = distRaw(oLat, oLng, otLat, otLng);
-          if (otD <= minD || otD >= maxD) continue;
-          const otB   = bearing(oLat, oLng, otLat, otLng);
-          const aToOt = ((otB - smB + 360) % 360);
-          const between = aToB <= 180 ? (aToOt > 0 && aToOt < aToB) : (aToOt > aToB);
-          if (between) return true;
-        }
-        return false;
-      }
-
-      // Try ±45° first, then widen to ±90°. Beyond 90° we don't merge — wrong direction.
-      // Skip any candidate that has another cluster sitting between it and sm.
+      // Try immediate grid neighbours (radius 1 = 8-cell Moore neighbourhood) first,
+      // then widen to radius 2. Adjacent cells can't have another cluster between them
+      // by definition, so this naturally prevents cross-cluster jumps.
       let target = null;
-      for (const maxAngle of [45, 90]) {
+      for (const radius of [1, 2]) {
         let bestDist = Infinity;
         for (const cl of ok) {
-          if (angularDiff(smB, clBearing(cl)) > maxAngle) continue;
-          if (blockedBy(cl)) continue;
+          const clCell = clGridCell(cl, oLat, oLng, cellKm);
+          if (Math.abs(smCell.row - clCell.row) > radius) continue;
+          if (Math.abs(smCell.col - clCell.col) > radius) continue;
           const d = distRaw(smLat, smLng,
-            cl.reduce((s,p) => s+p.lat, 0)/cl.length,
-            cl.reduce((s,p) => s+p.lng, 0)/cl.length);
+            cl.reduce((s,p)=>s+p.lat,0)/cl.length,
+            cl.reduce((s,p)=>s+p.lng,0)/cl.length);
           if (d < bestDist) { bestDist = d; target = cl; }
         }
         if (target) break;
       }
 
       if (!target) {
-        // No reachable same-direction cluster within 90° — keep as isolated orphan
+        // No grid-adjacent cluster found — keep as isolated orphan
         orphaned.add(sm);
         ok.push(sm);
         continue;
@@ -859,7 +853,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
   const geoClusters  = hybridCluster(rawStops, oLat, oLng, cfg.maxPins);
   const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
   const clusters     = enforceMinClusterSize(
-    dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng
+    dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng, cfg.cellKm
   );
 
   // Recompute slot weights using cluster-specific avg trips/year
@@ -1100,6 +1094,7 @@ function compute() {
   const timeAtStopMins     = parseFloat(document.getElementById('timeAtStop').value)||0;
   const timeAtOrigMins     = parseFloat(document.getElementById('timeAtOrigin').value)||0;
   const hasTime            = speedKmh>0 || timeAtStopMins>0 || timeAtOrigMins>0;
+  const cellKm             = Math.max(10, parseFloat(document.getElementById('cellKm').value)||100);
 
   // Build origin→destinations map
   let originGroups;
@@ -1116,7 +1111,7 @@ function compute() {
 
   const cfg = {minStops, minDrops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
     timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
-    minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul};
+    minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul, cellKm};
 
   exportRows = []; clusterSummary = [];
   let allTableHtml = '', allTourGroups = [], allNotFound = [];
