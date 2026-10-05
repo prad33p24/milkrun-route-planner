@@ -112,6 +112,7 @@
     .card.green { --card-accent: #10b981; }
     .card.purple { --card-accent: #8b5cf6; }
     .card.orange { --card-accent: #f59e0b; }
+    .card.indigo { --card-accent: #6366f1; }
 
     /* icon bubble */
     .icon-wrap {
@@ -124,12 +125,14 @@
     .card.green .icon-wrap { background: rgba(16,185,129,.15); }
     .card.purple .icon-wrap { background: rgba(139,92,246,.15); }
     .card.orange .icon-wrap { background: rgba(245,158,11,.15); }
+    .card.indigo .icon-wrap { background: rgba(99,102,241,.15); }
 
     .icon-wrap svg { width: 30px; height: 30px; }
     .card.blue  .icon-wrap svg { color: #60a5fa; }
     .card.green .icon-wrap svg { color: #34d399; }
     .card.purple .icon-wrap svg { color: #a78bfa; }
     .card.orange .icon-wrap svg { color: #fbbf24; }
+    .card.indigo .icon-wrap svg { color: #818cf8; }
 
     .card-body { flex: 1; }
     .card-title {
@@ -163,6 +166,7 @@
     .card.green .pill { background: rgba(16,185,129,.15);  color: #34d399; }
     .card.purple .pill { background: rgba(139,92,246,.15); color: #a78bfa; }
     .card.orange .pill { background: rgba(245,158,11,.15); color: #fbbf24; }
+    .card.indigo .pill { background: rgba(99,102,241,.15); color: #818cf8; }
 
     .arrow {
       width: 28px; height: 28px;
@@ -309,9 +313,31 @@
       </div>
     </a>
 
+    <!-- Centroid Mapper -->
+    <a class="card indigo" href="centroid-mapper.html">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Centroid Mapper</div>
+        <div class="card-desc">Assign each destination to its nearest origin by road distance, with an optional same-state requirement and cross-state fallback flagging.</div>
+      </div>
+      <div class="card-footer">
+        <span class="pill">Source Assignment</span>
+        <div class="arrow">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8h10M9 4l4 4-4 4"/>
+          </svg>
+        </div>
+      </div>
+    </a>
+
   </div>
 
-  <footer>GAMANA &nbsp;·&nbsp; 19,381 pincodes indexed &nbsp;·&nbsp; 4 tools</footer>
+  <footer>GAMANA &nbsp;·&nbsp; 19,381 pincodes indexed &nbsp;·&nbsp; 5 tools</footer>
 
 </body>
 </html>
