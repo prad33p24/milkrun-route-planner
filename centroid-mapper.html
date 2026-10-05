@@ -86,46 +86,38 @@
     <div class="nav-links"><a href="index.html">&#8592; GAMANA Home</a></div>
   </header>
 
-  <!-- Step 1: Origins -->
+  <!-- Step 1: Origins & Destinations -->
   <div class="card">
-    <div class="card-title"><div class="step-num">1</div> Origins <span class="opt">the few source points you're assigning destinations to</span></div>
+    <div class="card-title"><div class="step-num">1</div> Origins &amp; Destinations</div>
 
     <div class="tpl-row">
       <button class="btn-tpl" onclick="downloadTemplate()">&#11015; Download Input Template</button>
-      <span class="tpl-hint">One workbook, two sheets — Origins and Destinations. Fill both, then upload each below (or just the one you need here).</span>
+      <span class="tpl-hint">One file, four columns — Origin Name, Origin Pincode, Destination Name, Destination Pincode. The two lists are independent and don't need to be the same length.</span>
     </div>
 
-    <div class="drop" id="origDrop">
-      <input type="file" id="origFile" accept=".xlsx,.xls,.csv,.txt" />
+    <div class="drop" id="fileDrop">
+      <input type="file" id="combinedFile" accept=".xlsx,.xls,.csv,.txt" />
       <div class="drop-icon">&#128203;</div>
-      <div class="drop-main">Upload origins file</div>
+      <div class="drop-main">Upload filled template</div>
       <div class="drop-hint">Drag &amp; drop or click — .xlsx, .csv or .txt</div>
     </div>
-    <div class="file-ok" id="origOk">&#10003; <span id="origLabel"></span></div>
+    <div class="file-ok" id="fileOk">&#10003; <span id="fileLabel"></span></div>
 
-    <div class="divider">&#8212; or paste origins (one per line: Name, Pincode) &#8212;</div>
-    <textarea id="origArea" placeholder="Hyderabad Hub, 500108&#10;Jaipur Hub, 302001&#10;Pune Hub, 411001"></textarea>
-  </div>
-
-  <!-- Step 2: Destinations -->
-  <div class="card">
-    <div class="card-title"><div class="step-num">2</div> Destinations <span class="opt">the (likely many) delivery points to assign</span></div>
-
-    <div class="drop" id="destDrop">
-      <input type="file" id="destFile" accept=".xlsx,.xls,.csv,.txt" />
-      <div class="drop-icon">&#128203;</div>
-      <div class="drop-main">Upload destinations file</div>
-      <div class="drop-hint">Drag &amp; drop or click — .xlsx, .csv or .txt</div>
+    <div class="row2" style="margin-top:18px">
+      <div>
+        <div class="divider" style="margin-top:0">&#8212; or paste origins (one per line: Name, Pincode) &#8212;</div>
+        <textarea id="origArea" placeholder="Hyderabad Hub, 500108&#10;Jaipur Hub, 302001&#10;Pune Hub, 411001"></textarea>
+      </div>
+      <div>
+        <div class="divider" style="margin-top:0">&#8212; or paste destination pincodes &#8212;</div>
+        <textarea id="destArea" placeholder="515402, 515408, 515413, 303001, 305001 ..."></textarea>
+      </div>
     </div>
-    <div class="file-ok" id="destOk">&#10003; <span id="destLabel"></span></div>
-
-    <div class="divider">&#8212; or paste destination pincodes (comma or newline separated) &#8212;</div>
-    <textarea id="destArea" placeholder="515402, 515408, 515413, 303001, 305001 ..."></textarea>
   </div>
 
-  <!-- Step 3: Options -->
+  <!-- Step 2: Options -->
   <div class="card">
-    <div class="card-title"><div class="step-num">3</div> Assignment Rule</div>
+    <div class="card-title"><div class="step-num">2</div> Assignment Rule</div>
     <div class="toggle-row">
       <input type="checkbox" id="sameState" checked />
       <label for="sameState">Require origin &amp; destination to be in the same state</label>
@@ -165,15 +157,22 @@ let origins = [];       // [{name, pin}]
 let destinations = [];  // [{name, pin}]
 
 // ── Template download ───────────────────────────────────────────────
+// One sheet, four columns. Origins and destinations are independent lists -
+// the rows aren't paired, so it's fine (expected, even) for one column pair
+// to run out of entries before the other. Blank cells are just ignored.
 function downloadTemplate() {
   if (typeof XLSX === 'undefined') { alert('Please wait — library loading'); return; }
   const wb = XLSX.utils.book_new();
-  const oData = [['Origin Name', 'Origin Pincode'], ['Hyderabad Hub', '500108'], ['Jaipur Hub', '302001'], ['Pune Hub', '411001']];
-  const dData = [['Destination Name (optional)', 'Destination Pincode'], ['', '515402'], ['', '515408'], ['', '303001'], ['', '305001']];
-  const ws1 = XLSX.utils.aoa_to_sheet(oData); ws1['!cols'] = [{wch:20},{wch:16}];
-  const ws2 = XLSX.utils.aoa_to_sheet(dData); ws2['!cols'] = [{wch:26},{wch:20}];
-  XLSX.utils.book_append_sheet(wb, ws1, 'Origins');
-  XLSX.utils.book_append_sheet(wb, ws2, 'Destinations');
+  const data = [
+    ['Origin Name', 'Origin Pincode', 'Destination Name (optional)', 'Destination Pincode'],
+    ['Hyderabad Hub', '500108', '', '515402'],
+    ['Jaipur Hub', '302001', '', '515408'],
+    ['Pune Hub', '411001', '', '303001'],
+    ['', '', '', '305001'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:18},{wch:16},{wch:26},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Centroid Mapper Input');
   XLSX.writeFile(wb, 'centroid_mapper_template.xlsx');
 }
 
@@ -225,9 +224,13 @@ function dedupe(list) {
 }
 
 // ── File upload wiring ───────────────────────────────────────────────
-function wireDrop(dropId, fileId, okId, labelId, onParsed) {
-  const zone = document.getElementById(dropId);
-  const inp = document.getElementById(fileId);
+// One dropzone. Origins come from columns 1-2, destinations from columns
+// 3-4, of the SAME file - independent lists, not paired rows. An older
+// 2-sheet (Origins/Destinations) workbook still works too, for anyone who
+// saved one before this became a single-sheet template.
+(function () {
+  const zone = document.getElementById('fileDrop');
+  const inp = document.getElementById('combinedFile');
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('over'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('over'));
   zone.addEventListener('drop', e => {
@@ -236,45 +239,64 @@ function wireDrop(dropId, fileId, okId, labelId, onParsed) {
   });
   inp.addEventListener('change', () => { if (inp.files[0]) handleFile(inp.files[0]); });
 
+  function apply(fileName, oList, dList) {
+    origins = oList;
+    destinations = dList;
+    document.getElementById('origArea').value = '';
+    document.getElementById('destArea').value = '';
+    document.getElementById('fileOk').style.display = 'flex';
+    document.getElementById('fileLabel').textContent =
+      fileName + ' — ' + oList.length + ' origin(s), ' + dList.length + ' destination(s)';
+    checkReady();
+  }
+
   function handleFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     const isBinary = ['xlsx','xls','xlsm'].includes(ext);
     const reader = new FileReader();
-    const sheetHint = dropId === 'origDrop' ? 'origin' : 'destination';
     if (isBinary) {
       reader.onload = e => {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-        let sheetName = wb.SheetNames.find(n => new RegExp(sheetHint, 'i').test(n)) || wb.SheetNames[0];
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '' });
-        const list = dedupe(parseRows(rows));
-        onParsed(list);
-        document.getElementById(okId).style.display = 'flex';
-        document.getElementById(labelId).textContent = file.name + ' — ' + list.length + ' entries';
+        const oSheet = wb.SheetNames.find(n => /^origins?$/i.test(n));
+        const dSheet = wb.SheetNames.find(n => /^destinations?$/i.test(n));
+        let oList, dList;
+        if (oSheet && dSheet) {
+          oList = dedupe(parseRows(XLSX.utils.sheet_to_json(wb.Sheets[oSheet], { header: 1, defval: '' })));
+          dList = dedupe(parseRows(XLSX.utils.sheet_to_json(wb.Sheets[dSheet], { header: 1, defval: '' })));
+        } else {
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+          oList = dedupe(parseRows(rows.map(r => [r[0], r[1]])));
+          dList = dedupe(parseRows(rows.map(r => [r[2], r[3]])));
+        }
+        apply(file.name, oList, dList);
       };
       reader.readAsArrayBuffer(file);
     } else {
       reader.onload = e => {
-        // Plain text/CSV uploads are free-form (could be "Name, Pincode" per
-        // line, or a flat comma/newline list) - parseText already handles
-        // both robustly, same as the paste textarea.
-        const list = dedupe(parseText(e.target.result));
-        onParsed(list);
-        document.getElementById(okId).style.display = 'flex';
-        document.getElementById(labelId).textContent = file.name + ' — ' + list.length + ' entries';
+        const text = e.target.result;
+        const rows = text.split(/\r?\n/).map(l => l.split(',').map(c => c.trim()));
+        let oList = dedupe(parseRows(rows.map(r => [r[0], r[1]])));
+        let dList = dedupe(parseRows(rows.map(r => [r[2], r[3]])));
+        // A plain flat list (no 4-column structure) has nothing in columns
+        // 3-4 - fall back to treating the whole file as destinations, same
+        // as pasting it into the destinations textarea.
+        if (!oList.length && !dList.length) { oList = []; dList = dedupe(parseText(text)); }
+        apply(file.name, oList, dList);
       };
       reader.readAsText(file);
     }
   }
-}
+})();
 
-wireDrop('origDrop', 'origFile', 'origOk', 'origLabel', list => { origins = list; document.getElementById('origArea').value = ''; checkReady(); });
-wireDrop('destDrop', 'destFile', 'destOk', 'destLabel', list => { destinations = list; document.getElementById('destArea').value = ''; checkReady(); });
-
+// Editing a textarea only clears ITS OWN list - if a file set both origins
+// and destinations and you then tweak just one by hand, the other stays.
+// The file indicator hides either way since its entry count can no longer
+// describe both lists accurately.
 document.getElementById('origArea').addEventListener('input', () => {
-  origins = []; document.getElementById('origOk').style.display = 'none'; checkReady();
+  origins = []; document.getElementById('fileOk').style.display = 'none'; checkReady();
 });
 document.getElementById('destArea').addEventListener('input', () => {
-  destinations = []; document.getElementById('destOk').style.display = 'none'; checkReady();
+  destinations = []; document.getElementById('fileOk').style.display = 'none'; checkReady();
 });
 
 function checkReady() {
