@@ -952,13 +952,20 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
   }
 
-  if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
+  if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, belowMin:[], stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
   // Iterative clustering: grid-cell bucketing → drop-split → merge → centroid-reassign (×5)
   // Each pass can detect and fix stops that ended up in non-neighbouring grid clusters
   // due to Phase 3 cascade-merging, then re-merge any newly small fragments.
-  const clusters = buildClusters(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins,
+  const built = buildClusters(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins,
     cfg.maxDrops, cfg.minStops, cfg.minDrops, cfg.deviationStops);
+
+  // No output without meeting the minimum. buildClusters only leaves a cluster
+  // under it when this origin has fewer pincodes than the minimum in total -
+  // those pincodes are reported as not routed rather than shown as a route.
+  const clusters = built.filter(cl => cl.length >= cfg.minStops);
+  const belowMin = built.filter(cl => cl.length < cfg.minStops).flat().map(s => s.pin);
+  if (!clusters.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, belowMin, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
   // Recompute slot weights using cluster-specific avg trips/year
   // (removes the global 156-trips assumption; same factor for all pincodes within a cluster)
@@ -1178,8 +1185,8 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       'id="clkm'+globalCi+'">&#128345; '+cum.toFixed(1)+' km</span><span');
   }
 
-  return {tableHtml, toursByCluster, clusterLabels, summaryRows, detailRows, notFound,
-    stopCount: rawStops.length, longestKm, totalWeight, oLat, oLng, clusterCount: tourData.length};
+  return {tableHtml, toursByCluster, clusterLabels, summaryRows, detailRows, notFound, belowMin,
+    stopCount: tourData.reduce((s, td) => s + td.cl.length, 0), longestKm, totalWeight, oLat, oLng, clusterCount: tourData.length};
 }
 
 // ── Compute ───────────────────────────────────────────────────────────
@@ -1218,7 +1225,7 @@ function compute() {
     minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul, cellKm};
 
   exportRows = []; clusterSummary = [];
-  let allTableHtml = '', allTourGroups = [], allNotFound = [];
+  let allTableHtml = '', allTourGroups = [], allNotFound = [], allBelowMin = [];
   let totalClusters=0, totalStops=0, totalWeight=0, globalLongest=0, colorOffset=0;
 
   for (const [originPin, destPins] of originGroups) {
@@ -1234,6 +1241,10 @@ function compute() {
     }
 
     const r = processOrigin(originPin, destPins, origCfg, colorOffset);
+    if (r.belowMin.length) {
+      allBelowMin.push(...r.belowMin);
+      if (!r.clusterCount) allTableHtml += '<div class="alert alert-warn">&#9888; Not routed: only ' + r.belowMin.length + ' pincode(s) for this origin, below the minimum of ' + cfg.minStops + ' per cluster.</div>';
+    }
     allTableHtml     += r.tableHtml;
     exportRows.push(...r.detailRows);
     clusterSummary.push(...r.summaryRows);
@@ -1246,7 +1257,12 @@ function compute() {
     colorOffset   += r.clusterCount;
   }
 
-  if (!totalStops) { renderErr('No valid delivery pincodes found.'); return; }
+  if (!totalStops) {
+    renderErr(allBelowMin.length
+      ? 'No routes: no origin has at least ' + cfg.minStops + ' pincodes, the minimum per cluster. ' + allBelowMin.length + ' pincode(s) not routed.'
+      : 'No valid delivery pincodes found.');
+    return;
+  }
 
   let statsHtml =
     '<div class="stat"><div class="stat-n">'+totalClusters+'</div><div class="stat-l">Clusters</div></div>'
@@ -1259,8 +1275,13 @@ function compute() {
   if (allNotFound.length)
     statsHtml += '<div class="stat" style="background:#fee2e2"><div class="stat-n" style="color:var(--red)">'+allNotFound.length+'</div><div class="stat-l">Skipped</div></div>';
 
-  const alertHtml = allNotFound.length
+  if (allBelowMin.length)
+    statsHtml += '<div class="stat" style="background:#fff7ed"><div class="stat-n" style="color:#c2410c">'+allBelowMin.length+'</div><div class="stat-l">Below Min (not routed)</div></div>';
+
+  let alertHtml = allNotFound.length
     ? '<div class="alert alert-warn">&#9888; Skipped: '+allNotFound.slice(0,10).join(', ')+(allNotFound.length>10?' …':'')+'</div>' : '';
+  if (allBelowMin.length)
+    alertHtml += '<div class="alert alert-warn">&#9888; Not routed (fewer than '+cfg.minStops+' pincodes for their origin): '+allBelowMin.slice(0,10).join(', ')+(allBelowMin.length>10?' …':'')+'</div>';
   openOutputTab(statsHtml, alertHtml, allTableHtml, allTourGroups, exportRows, clusterSummary);
 }
 
@@ -1362,6 +1383,8 @@ function openOutputTab(statsHtml, alertHtml, tableHtml, tourGroups, expRows, clu
     +'XLSX.writeFile(wb,"milkrun_planner_output.xlsx");}';
 
   var css='*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}'
+    +'.alert{padding:10px 14px;border-radius:8px;font-size:.84rem;margin-bottom:12px}'
+    +'.alert-warn{background:#fef9c3;border:1px solid #fde047;color:#713f12}'
     +'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:24px 16px 64px}'
     +'.wrap{max-width:960px;margin:0 auto}'
     +'.top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px}'
