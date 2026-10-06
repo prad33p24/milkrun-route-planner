@@ -154,7 +154,7 @@
     </div>
     <div class="row3" style="margin-bottom:16px">
       <div>
-        <label>Min Pincodes per Cluster</label>
+        <label>Min Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(hard minimum)</span></label>
         <input type="number" id="minStops" value="4" min="1" max="20" />
       </div>
       <div>
@@ -219,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -744,6 +744,119 @@ function enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, 
 }
 
 
+// ── Iterative refinement: grid → drop-split → merge → reassign (×5) ─────
+// Each pass can undo bad merges from the previous pass: stops whose cluster
+// centroid is now >1 grid cell away (because Phase 3 cascade-merged) are
+// evicted and placed in the nearest cluster whose centroid IS within 1 cell.
+function buildClusters(rawStops, oLat, oLng, cellKm, maxPins, maxDrops, minStops, minDrops, deviationStops) {
+  const cosLat = Math.cos(oLat * DEG);
+
+  // Phase 1: strict grid-cell assignment
+  let clusters = gridCluster(rawStops, oLat, oLng, cellKm, maxPins);
+
+  for (let pass = 0; pass < 5; pass++) {
+    // Phase 2: split clusters exceeding drop-weight limit
+    clusters = splitByDrops(clusters, maxDrops, maxPins, oLat, oLng);
+
+    // Phase 3: merge small clusters into grid-adjacent, ring-compatible neighbours
+    clusters = enforceMinClusterSize(clusters, minStops, minDrops, maxDrops, maxPins, deviationStops, oLat, oLng, cellKm);
+
+    // Phase 4: centroid reassignment — snapshot centroid cells, then each stop
+    // moves to the closest cluster whose centroid is within 1 grid cell of the
+    // stop's own cell AND is ring-compatible. This splits bad cascade-merges.
+    const cents = clusters.map(cl => ({
+      lat: cl.reduce((s,p)=>s+p.lat,0)/cl.length,
+      lng: cl.reduce((s,p)=>s+p.lng,0)/cl.length
+    }));
+    const cCells = cents.map(c => ({
+      row: Math.floor((c.lat - oLat) * KM_PER_DEG_LAT / cellKm),
+      col: Math.floor((c.lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm)
+    }));
+    const cRings = cents.map(c => getRing(distRaw(oLat, oLng, c.lat, c.lng)));
+
+    const next = clusters.map(() => []);
+    let anyMoved = false;
+    for (let ci = 0; ci < clusters.length; ci++) {
+      for (const stop of clusters[ci]) {
+        const sRow = Math.floor((stop.lat - oLat) * KM_PER_DEG_LAT / cellKm);
+        const sCol = Math.floor((stop.lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm);
+        const sRing = getRing(distRaw(oLat, oLng, stop.lat, stop.lng));
+
+        // Distance optimisation: move to the closest grid-adjacent, ring-compatible cluster.
+        // A target cluster may accept up to maxPins + deviationStops stops — this lets
+        // a stop join its geographically nearest cluster even if it pushes the count
+        // slightly beyond the hard cap, matching the user-configured deviation tolerance.
+        const devCap = maxPins + (deviationStops || 0);
+        let bestJ = ci, bestD = distRaw(stop.lat, stop.lng, cents[ci].lat, cents[ci].lng);
+        for (let j = 0; j < clusters.length; j++) {
+          if (j === ci) continue;
+          if (next[j].length >= devCap) continue;           // target already at deviation limit
+          if (Math.abs(sRow - cCells[j].row) > 1 || Math.abs(sCol - cCells[j].col) > 1) continue;
+          if (Math.abs(sRing - cRings[j]) > 1) continue;
+          const d = distRaw(stop.lat, stop.lng, cents[j].lat, cents[j].lng);
+          if (d < bestD) { bestD = d; bestJ = j; }
+        }
+        if (bestJ !== ci) anyMoved = true;
+        next[bestJ].push(stop);
+      }
+    }
+
+    // Hard-split only clusters that exceed the deviation-extended limit;
+    // clusters within maxPins + deviationStops are kept as distance-optimal.
+    const devLimit = maxPins + (deviationStops || 0);
+    const afterReassign = [];
+    for (const cl of next.filter(c => c.length > 0)) {
+      if (cl.length <= devLimit) afterReassign.push(cl);
+      else for (const sub of dirSplit(cl, oLat, oLng, maxPins)) afterReassign.push(sub);
+    }
+    clusters = afterReassign;
+
+    if (!anyMoved) break; // converged — no stop wanted to move
+  }
+
+  return forceMinClusterSize(clusters, minStops, maxPins, deviationStops);
+}
+
+// ── Hard minimum: no final cluster may have fewer than minStops pincodes ──
+// The passes above treat grid adjacency and distance rings as constraints,
+// so they can legitimately leave orphans, or fragments that Phase 4 emptied
+// out. Here those become preferences: each undersized cluster (smallest
+// first) is dissolved and every stop goes to the nearest remaining cluster
+// with room under maxPins + deviation. If no cluster has room, the stop goes
+// to the nearest one anyway — the minimum is the rule that can't bend.
+// A run with fewer than minStops pincodes in total can't satisfy it and
+// ends as one cluster holding everything.
+function forceMinClusterSize(clusters, minStops, maxPins, deviationStops) {
+  const cap = maxPins + (deviationStops || 0);
+  const result = clusters.filter(c => c.length > 0).map(c => [...c]);
+  const centroid = cl => ({
+    lat: cl.reduce((s,p)=>s+p.lat,0)/cl.length,
+    lng: cl.reduce((s,p)=>s+p.lng,0)/cl.length
+  });
+
+  while (result.length > 1) {
+    let si = -1;
+    for (let i = 0; i < result.length; i++) {
+      if (result[i].length < minStops && (si < 0 || result[i].length < result[si].length)) si = i;
+    }
+    if (si < 0) break;
+
+    const small = result.splice(si, 1)[0];
+    const cents = result.map(centroid);
+    for (const stop of small) {
+      let roomJ = -1, roomD = Infinity, anyJ = 0, anyD = Infinity;
+      for (let j = 0; j < result.length; j++) {
+        const d = distRaw(stop.lat, stop.lng, cents[j].lat, cents[j].lng);
+        if (d < anyD) { anyD = d; anyJ = j; }
+        if (result[j].length < cap && d < roomD) { roomD = d; roomJ = j; }
+      }
+      result[roomJ >= 0 ? roomJ : anyJ].push(stop);
+    }
+  }
+
+  return result;
+}
+
 // ── Nearest-Neighbour tour ────────────────────────────────────────────
 function nearestNeighbour(oLat, oLng, stops) {
   const pool = [...stops], tour = [];
@@ -841,14 +954,11 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
-  // Phase 1: grid-cell bucketing — each stop to its exact (row,col) cell
-  // Phase 2: split cells exceeding maxDrops slot-weight
-  // Phase 3: merge small clusters into grid-adjacent neighbours only (radius 1, no fallback)
-  const geoClusters  = gridCluster(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins);
-  const dropClusters = splitByDrops(geoClusters, cfg.maxDrops, cfg.maxPins, oLat, oLng);
-  const clusters     = enforceMinClusterSize(
-    dropClusters, cfg.minStops, cfg.minDrops, cfg.maxDrops, cfg.maxPins, cfg.deviationStops, oLat, oLng, cfg.cellKm
-  );
+  // Iterative clustering: grid-cell bucketing → drop-split → merge → centroid-reassign (×5)
+  // Each pass can detect and fix stops that ended up in non-neighbouring grid clusters
+  // due to Phase 3 cascade-merging, then re-merge any newly small fragments.
+  const clusters = buildClusters(rawStops, oLat, oLng, cfg.cellKm, cfg.maxPins,
+    cfg.maxDrops, cfg.minStops, cfg.minDrops, cfg.deviationStops);
 
   // Recompute slot weights using cluster-specific avg trips/year
   // (removes the global 156-trips assumption; same factor for all pincodes within a cluster)
