@@ -113,6 +113,7 @@
     .card.purple { --card-accent: #8b5cf6; }
     .card.orange { --card-accent: #f59e0b; }
     .card.indigo { --card-accent: #6366f1; }
+    .card.pink { --card-accent: #ec4899; }
 
     /* icon bubble */
     .icon-wrap {
@@ -126,6 +127,7 @@
     .card.purple .icon-wrap { background: rgba(139,92,246,.15); }
     .card.orange .icon-wrap { background: rgba(245,158,11,.15); }
     .card.indigo .icon-wrap { background: rgba(99,102,241,.15); }
+    .card.pink .icon-wrap { background: rgba(236,72,153,.15); }
 
     .icon-wrap svg { width: 30px; height: 30px; }
     .card.blue  .icon-wrap svg { color: #60a5fa; }
@@ -133,6 +135,7 @@
     .card.purple .icon-wrap svg { color: #a78bfa; }
     .card.orange .icon-wrap svg { color: #fbbf24; }
     .card.indigo .icon-wrap svg { color: #818cf8; }
+    .card.pink .icon-wrap svg { color: #f472b6; }
 
     .card-body { flex: 1; }
     .card-title {
@@ -167,6 +170,7 @@
     .card.purple .pill { background: rgba(139,92,246,.15); color: #a78bfa; }
     .card.orange .pill { background: rgba(245,158,11,.15); color: #fbbf24; }
     .card.indigo .pill { background: rgba(99,102,241,.15); color: #818cf8; }
+    .card.pink .pill { background: rgba(236,72,153,.15); color: #f472b6; }
 
     .arrow {
       width: 28px; height: 28px;
@@ -335,9 +339,31 @@
       </div>
     </a>
 
+    <!-- Distance Calculator -->
+    <a class="card pink" href="distance-calculator.html">
+      <div class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/>
+          <path d="M7 19h8a4 4 0 0 0 0-8h-4a4 4 0 0 1 0-8h6"/>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Distance Calculator</div>
+        <div class="card-desc">Road distance between an origin and a destination pincode, with straight-line distance, state check, and a map of the route.</div>
+      </div>
+      <div class="card-footer">
+        <span class="pill">Distance</span>
+        <div class="arrow">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8h10M9 4l4 4-4 4"/>
+          </svg>
+        </div>
+      </div>
+    </a>
+
   </div>
 
-  <footer>GAMANA &nbsp;·&nbsp; 19,381 pincodes indexed &nbsp;·&nbsp; 5 tools</footer>
+  <footer>GAMANA &nbsp;·&nbsp; 19,381 pincodes indexed &nbsp;·&nbsp; 6 tools</footer>
 
 </body>
 </html>

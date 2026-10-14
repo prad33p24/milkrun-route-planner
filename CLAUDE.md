@@ -24,8 +24,9 @@ Owner: Pradeep (logistics background, not a developer) — explain in plain lang
 | `milkrun-calc.html` | Milkrun Calculation |
 | `district-mapper.html` | Cluster Grid (fixed-grid pincode binning) |
 | `centroid-mapper.html` | Centroid Mapper — **one input file, 4 columns** (origin & destination in the same file) |
-| `distance-calculator.html` | Distance Calculator — origin & destination pincodes. Built on the laptop with a hub card in `index.html`, **not pushed yet** (Pradeep said "not yet") |
-| `loading-simulation/` | Loading Simulation — **built output only** (React/Three.js). Source lives outside this repo |
+| `distance-calculator.html` | Distance Calculator — origin & destination pincodes. Has its own hub card in `index.html` |
+| `loading-simulation/` | Loading Simulation — **built output** served by the site (don't edit by hand) |
+| `loading-simulation-src/` | Loading Simulation **source** (React + TypeScript + Three.js, Vite) |
 
 ## Loading Simulation (summary of agreed behaviour)
 
@@ -33,8 +34,12 @@ Owner: Pradeep (logistics background, not a developer) — explain in plain lang
 highest-quantity cargo group loads first; per cargo type it simulates both floor orientations and keeps
 the better one; colours by cargo name; container borders. PDF export: top / side / bottom / 3D views,
 CFT, weight, box counts, and "cm used / cm left" ticks (not %). Vite `base` is
-`/milkrun-route-planner/loading-simulation/`; deploy = `npm run build` then copy `dist/` into
-`loading-simulation/`.
+`/milkrun-route-planner/loading-simulation/`. To change it: edit `loading-simulation-src/frontend/src/`, then
+```bash
+cd loading-simulation-src/frontend && npm ci && npm run build
+rm -rf ../../loading-simulation && cp -r dist ../../loading-simulation
+```
+and commit both folders together. Engine: `src/engine/` (binPacker, pack, orientationAnalysis, pdfExport).
 
 ## Local-only files (not committed, laptop only)
 
