@@ -219,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed 5 km apart (road distance) around the pincode. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed 5 km apart (road distance) around the pincode; all drops of one pincode always stay in the same cluster. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -586,16 +586,69 @@ const TRIPS_PER_YEAR = 156; // 6-day week, alternate-day dispatch
 // Sort stops by bearing from origin (primary) then distance (secondary),
 // then split into maxCount-sized chunks. This keeps each chunk in a tight
 // directional corridor with no back-and-forth.
+// ── Same pincode = same cluster ──────────────────────────────────────
+// A pincode can have several drops (repeated rows). All drops of one pincode
+// always travel together: every split, merge and move below works on whole
+// pincode groups, never on single drops. Decisions use the pincode's own
+// location (baseLat/baseLng), not the 5 km offset of a repeat drop.
+const baseLatOf = st => st.baseLat !== undefined ? st.baseLat : st.lat;
+const baseLngOf = st => st.baseLng !== undefined ? st.baseLng : st.lng;
+function pinGroups(stops) {
+  const m = new Map();
+  for (const st of stops) {
+    if (!m.has(st.pin)) m.set(st.pin, []);
+    m.get(st.pin).push(st);
+  }
+  return [...m.values()];
+}
+// Safety net: if a pincode still sits in more than one cluster, move all its
+// drops into the cluster that already holds most of them (tie: nearest centroid).
+function keepPincodesTogether(clusters) {
+  const where = new Map();   // pin -> Map(clusterIdx -> count)
+  clusters.forEach((cl, i) => cl.forEach(st => {
+    if (!where.has(st.pin)) where.set(st.pin, new Map());
+    const m = where.get(st.pin); m.set(i, (m.get(i) || 0) + 1);
+  }));
+  const owner = new Map();
+  for (const [pin, m] of where) {
+    if (m.size < 2) continue;
+    let best = -1, bestN = -1, bestD = Infinity;
+    const any = clusters[[...m.keys()][0]].find(st => st.pin === pin);
+    for (const [i, n] of m) {
+      const cl = clusters[i];
+      const d = distRaw(baseLatOf(any), baseLngOf(any),
+        cl.reduce((s,p)=>s+p.lat,0)/cl.length, cl.reduce((s,p)=>s+p.lng,0)/cl.length);
+      if (n > bestN || (n === bestN && d < bestD)) { best = i; bestN = n; bestD = d; }
+    }
+    owner.set(pin, best);
+  }
+  if (!owner.size) return clusters;
+  const out = clusters.map(() => []);
+  clusters.forEach((cl, i) => cl.forEach(st => {
+    out[owner.has(st.pin) ? owner.get(st.pin) : i].push(st);
+  }));
+  return out.filter(c => c.length > 0);
+}
+
 function dirSplit(stops, oLat, oLng, maxCount) {
   if (stops.length <= maxCount) return [stops];
-  const sorted = stops.slice().sort((a, b) => {
-    const bA = bearing(oLat, oLng, a.lat, a.lng);
-    const bB = bearing(oLat, oLng, b.lat, b.lng);
+  // Sort whole pincode groups by bearing → distance, then fill chunks with
+  // whole groups. A chunk may come out smaller than maxCount so a pincode is
+  // never cut in two; a single pincode with more drops than maxCount stays whole.
+  const groups = pinGroups(stops).sort((ga, gb) => {
+    const a = ga[0], b = gb[0];
+    const bA = bearing(oLat, oLng, baseLatOf(a), baseLngOf(a));
+    const bB = bearing(oLat, oLng, baseLatOf(b), baseLngOf(b));
     if (Math.abs(bA - bB) > 0.001) return bA - bB;
-    return distRaw(oLat, oLng, a.lat, a.lng) - distRaw(oLat, oLng, b.lat, b.lng);
+    return distRaw(oLat, oLng, baseLatOf(a), baseLngOf(a)) - distRaw(oLat, oLng, baseLatOf(b), baseLngOf(b));
   });
   const result = [];
-  for (let i = 0; i < sorted.length; i += maxCount) result.push(sorted.slice(i, i + maxCount));
+  let cur = [];
+  for (const g of groups) {
+    if (cur.length && cur.length + g.length > maxCount) { result.push(cur); cur = []; }
+    cur.push(...g);
+  }
+  if (cur.length) result.push(cur);
   return result;
 }
 
@@ -608,8 +661,9 @@ function gridCluster(stops, oLat, oLng, cellKm, maxPins) {
   const cosLat = Math.cos(oLat * DEG);
   const buckets = new Map();
   for (const stop of stops) {
-    const row = Math.floor((stop.lat - oLat) * KM_PER_DEG_LAT / cellKm);
-    const col = Math.floor((stop.lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm);
+    // Grid cell from the pincode's own location, so all its drops share a cell
+    const row = Math.floor((baseLatOf(stop) - oLat) * KM_PER_DEG_LAT / cellKm);
+    const col = Math.floor((baseLngOf(stop) - oLng) * KM_PER_DEG_LAT * cosLat / cellKm);
     const key = row + '_' + col;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(stop);
@@ -777,7 +831,9 @@ function buildClusters(rawStops, oLat, oLng, cellKm, maxPins, maxDrops, minStops
     const next = clusters.map(() => []);
     let anyMoved = false;
     for (let ci = 0; ci < clusters.length; ci++) {
-      for (const stop of clusters[ci]) {
+      // Move whole pincode groups, decided from the pincode's own location
+      for (const grp of pinGroups(clusters[ci])) {
+        const stop = {lat: baseLatOf(grp[0]), lng: baseLngOf(grp[0])};
         const sRow = Math.floor((stop.lat - oLat) * KM_PER_DEG_LAT / cellKm);
         const sCol = Math.floor((stop.lng - oLng) * KM_PER_DEG_LAT * cosLat / cellKm);
         const sRing = getRing(distRaw(oLat, oLng, stop.lat, stop.lng));
@@ -790,14 +846,14 @@ function buildClusters(rawStops, oLat, oLng, cellKm, maxPins, maxDrops, minStops
         let bestJ = ci, bestD = distRaw(stop.lat, stop.lng, cents[ci].lat, cents[ci].lng);
         for (let j = 0; j < clusters.length; j++) {
           if (j === ci) continue;
-          if (next[j].length >= devCap) continue;           // target already at deviation limit
+          if (next[j].length + grp.length > devCap) continue; // target would pass deviation limit
           if (Math.abs(sRow - cCells[j].row) > 1 || Math.abs(sCol - cCells[j].col) > 1) continue;
           if (Math.abs(sRing - cRings[j]) > 1) continue;
           const d = distRaw(stop.lat, stop.lng, cents[j].lat, cents[j].lng);
           if (d < bestD) { bestD = d; bestJ = j; }
         }
         if (bestJ !== ci) anyMoved = true;
-        next[bestJ].push(stop);
+        next[bestJ].push(...grp);
       }
     }
 
@@ -809,12 +865,12 @@ function buildClusters(rawStops, oLat, oLng, cellKm, maxPins, maxDrops, minStops
       if (cl.length <= devLimit) afterReassign.push(cl);
       else for (const sub of dirSplit(cl, oLat, oLng, maxPins)) afterReassign.push(sub);
     }
-    clusters = afterReassign;
+    clusters = keepPincodesTogether(afterReassign);
 
     if (!anyMoved) break; // converged — no stop wanted to move
   }
 
-  return forceMinClusterSize(clusters, minStops, maxPins, deviationStops);
+  return keepPincodesTogether(forceMinClusterSize(keepPincodesTogether(clusters), minStops, maxPins, deviationStops));
 }
 
 // ── Hard minimum: no final cluster may have fewer than minStops pincodes ──
@@ -843,14 +899,15 @@ function forceMinClusterSize(clusters, minStops, maxPins, deviationStops) {
 
     const small = result.splice(si, 1)[0];
     const cents = result.map(centroid);
-    for (const stop of small) {
+    for (const grp of pinGroups(small)) {          // whole pincode moves together
+      const sLat = baseLatOf(grp[0]), sLng = baseLngOf(grp[0]);
       let roomJ = -1, roomD = Infinity, anyJ = 0, anyD = Infinity;
       for (let j = 0; j < result.length; j++) {
-        const d = distRaw(stop.lat, stop.lng, cents[j].lat, cents[j].lng);
+        const d = distRaw(sLat, sLng, cents[j].lat, cents[j].lng);
         if (d < anyD) { anyD = d; anyJ = j; }
-        if (result[j].length < cap && d < roomD) { roomD = d; roomJ = j; }
+        if (result[j].length + grp.length <= cap && d < roomD) { roomD = d; roomJ = j; }
       }
-      result[roomJ >= 0 ? roomJ : anyJ].push(stop);
+      result[roomJ >= 0 ? roomJ : anyJ].push(...grp);
     }
   }
 
@@ -971,7 +1028,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     repeatCount.set(p.pin, k + 1);
     const base = geoMap.get(p.pin);
     const {lat, lng} = repeatDropOffset(base.lat, base.lng, k);
-    rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
+    rawStops.push({pin: p.pin, lat, lng, baseLat: base.lat, baseLng: base.lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
   }
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, belowMin:[], stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};

@@ -718,6 +718,37 @@ function repeatDropOffset(lat, lng, k) {
   };
 }
 
+// ── Same pincode = same cluster ──────────────────────────────────────
+// A pincode can have several drops (repeated rows). After clustering, if a
+// pincode sits in more than one cluster, all its drops move into the cluster
+// that already holds most of them (tie: the nearest cluster centre).
+function keepPincodesTogether(clusters) {
+  const where = new Map();   // pin -> Map(clusterIdx -> count)
+  clusters.forEach((cl, i) => cl.forEach(st => {
+    if (!where.has(st.pin)) where.set(st.pin, new Map());
+    const m = where.get(st.pin); m.set(i, (m.get(i) || 0) + 1);
+  }));
+  const owner = new Map();
+  for (const [pin, m] of where) {
+    if (m.size < 2) continue;
+    let best = -1, bestN = -1, bestD = Infinity;
+    const any = clusters[[...m.keys()][0]].find(st => st.pin === pin);
+    for (const [i, n] of m) {
+      const cl = clusters[i];
+      const d = distRaw(any.lat, any.lng,
+        cl.reduce((s,p)=>s+p.lat,0)/cl.length, cl.reduce((s,p)=>s+p.lng,0)/cl.length);
+      if (n > bestN || (n === bestN && d < bestD)) { best = i; bestN = n; bestD = d; }
+    }
+    owner.set(pin, best);
+  }
+  if (!owner.size) return clusters;
+  const out = clusters.map(() => []);
+  clusters.forEach((cl, i) => cl.forEach(st => {
+    out[owner.has(st.pin) ? owner.get(st.pin) : i].push(st);
+  }));
+  return out.filter(c => c.length > 0);
+}
+
 // ── Per-origin processing ────────────────────────────────────────────
 function processOrigin(originPin, inputPins, cfg, colorOffset) {
   const {oLat, oLng} = {oLat: geoMap.get(originPin).lat, oLng: geoMap.get(originPin).lng};
@@ -735,7 +766,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
   if (!stops.length) return {tableHtml:'', toursByCluster:[], summaryRows:[], detailRows:[], notFound, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
-  const clusters = enforceMinClusterSize(hybridCluster(stops, oLat, oLng, cfg.maxStops), cfg.minStops, cfg.maxStops, cfg.deviationStops);
+  const clusters = keepPincodesTogether(enforceMinClusterSize(hybridCluster(stops, oLat, oLng, cfg.maxStops), cfg.minStops, cfg.maxStops, cfg.deviationStops));
   const {speedKmh, timeAtStopMins, timeAtOrigMins, hasTime, returnToOrig} = cfg;
   const showWeight = stops.some(s => s.weight > 0);
   const showFreq   = stops.some(s => s.freq > 0);

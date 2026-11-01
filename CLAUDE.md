@@ -19,7 +19,7 @@ Owner: Pradeep (logistics background, not a developer) — explain in plain lang
 | File | Tool |
 |---|---|
 | `index.html` | Hub page linking all tools (one card per tool) |
-| `milkrun-planner.html` | Milkrun Route Planner. **Min Pincodes per Cluster is a hard minimum** — clusters below it are excluded and produce no route output ("minimum means minimum, no compromise"). **Repeated destination pincodes are separate drops**, not duplicates: each repeat is placed 5 km **road distance** from the others (`repeatDropOffset`). Same rule in `kmeans.html` and `hybrid.html` |
+| `milkrun-planner.html` | Milkrun Route Planner. **Min Pincodes per Cluster is a hard minimum** — clusters below it are excluded and produce no route output ("minimum means minimum, no compromise"). **Repeated destination pincodes are separate drops**, not duplicates: each repeat is placed 5 km **road distance** from the others (`repeatDropOffset`). **All drops of one pincode always stay in the same cluster** (clustering moves whole pincode groups; `keepPincodesTogether` is the safety net). Same rules in `kmeans.html` and `hybrid.html` (there via `keepPincodesTogether` after clustering) |
 | `kmeans.html`, `hybrid.html` | Route planner variants |
 | `milkrun-calc.html` | Milkrun Calculation |
 | `district-mapper.html` | Cluster Grid (fixed-grid pincode binning) |
