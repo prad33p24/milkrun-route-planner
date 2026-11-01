@@ -219,7 +219,7 @@
       </div>
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed about 5 km apart around the pincode. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
     </div>
   </div>
 
@@ -502,10 +502,10 @@ document.getElementById('pcArea').addEventListener('input', () => {
 });
 
 function parsePinsSimple(text) {
-  const seen = new Set(), pins = [];
+  const pins = [];   // repeated pincodes are kept: each one is a separate drop
   for (const tok of text.split(/[\s,;|\t\r\n]+/)) {
     const s = tok.trim().replace(/\D/g, '');
-    if (/^[1-9]\d{5}$/.test(s) && !seen.has(s)) { seen.add(s); pins.push({pin:s, weight:0, shipmentsPerYear:0}); }
+    if (/^[1-9]\d{5}$/.test(s)) pins.push({pin:s, weight:0, shipmentsPerYear:0});
   }
   return pins;
 }
@@ -933,22 +933,44 @@ function renderMap(originGroups) {
   if (bounds.length) leafletMap.fitBounds(bounds, {padding: [32,32]});
 }
 
+// ── Repeated pincodes = separate drops ───────────────────────────────
+// The 1st drop of a pincode sits on the pincode's own location. Further drops of
+// the same pincode are spread on rings around it so neighbouring drops are about
+// REPEAT_DROP_KM apart (straight line): ring 1 = 6 drops at 5 km, ring 2 = 12 drops
+// at 10 km, ring 3 = 18 drops at 15 km, ...
+const REPEAT_DROP_KM = 5;
+function repeatDropOffset(lat, lng, k) {
+  if (k === 0) return {lat, lng};
+  let ring = 1, idx = k - 1;
+  while (idx >= 6 * ring) { idx -= 6 * ring; ring++; }
+  const ang = (idx / (6 * ring)) * 2 * Math.PI;
+  const rKm = REPEAT_DROP_KM * ring;
+  return {
+    lat: lat + (rKm * Math.cos(ang)) / KM_PER_DEG_LAT,
+    lng: lng + (rKm * Math.sin(ang)) / (KM_PER_DEG_LAT * Math.cos(lat * DEG))
+  };
+}
+
 // ── Per-origin processing ────────────────────────────────────────────
 function processOrigin(originPin, inputPins, cfg, colorOffset) {
   const originName = (originNameMap.get(originPin) || '').trim() || originPin;
   const safeName   = originName.replace(/[^A-Za-z0-9]/g, '_');
   const {lat: oLat, lng: oLng} = geoMap.get(originPin);
   const notFound = [], rawStops = [];
-  const seen = new Set([originPin]);
+  const repeatCount = new Map();   // pincode -> how many drops already placed for it
 
   for (const p of inputPins) {
-    if (seen.has(p.pin)) continue;
-    seen.add(p.pin);
-    if (!geoMap.has(p.pin)) { notFound.push(p.pin); continue; }
+    if (p.pin === originPin) continue;            // destination same as the depot pincode
+    if (!geoMap.has(p.pin)) { if (!notFound.includes(p.pin)) notFound.push(p.pin); continue; }
     const shipmentsPerYear = p.shipmentsPerYear || 0;
     // Filter: skip pincodes below minimum annual shipments (only when data is present)
     if (cfg.minShipmentsPerYear > 0 && shipmentsPerYear > 0 && shipmentsPerYear < cfg.minShipmentsPerYear) continue;
-    const {lat, lng} = geoMap.get(p.pin);
+    // A repeated pincode is a separate drop location, not a duplicate: each repeat is
+    // placed ~REPEAT_DROP_KM away from the others (see repeatDropOffset).
+    const k = repeatCount.get(p.pin) || 0;
+    repeatCount.set(p.pin, k + 1);
+    const base = geoMap.get(p.pin);
+    const {lat, lng} = repeatDropOffset(base.lat, base.lng, k);
     rawStops.push({pin: p.pin, lat, lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
   }
 
