@@ -219,10 +219,10 @@ document.getElementById('pcArea').addEventListener('input', () => {
 });
 
 function parsePins(text) {
-  const seen = new Set(), pins = [];
+  const pins = [];   // repeated pincodes are kept: each one is a separate drop
   for (const tok of text.split(/[\s,;|\t\r\n]+/)) {
     const s = tok.trim().replace(/\D/g, '');
-    if (/^[1-9]\d{5}$/.test(s) && !seen.has(s)) { seen.add(s); pins.push(s); }
+    if (/^[1-9]\d{5}$/.test(s)) pins.push(s);
   }
   return pins;
 }
@@ -238,6 +238,25 @@ function dist(lat1, lng1, lat2, lng2) {
   const a = Math.sin((lat2-lat1)*DEG/2)**2
           + Math.cos(lat1*DEG)*Math.cos(lat2*DEG)*Math.sin((lng2-lng1)*DEG/2)**2;
   return 6371*2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a))*1.25;
+}
+
+const KM_PER_DEG_LAT = 111.32;
+// ── Repeated pincodes = separate drops ───────────────────────────────
+// The 1st drop of a pincode sits on the pincode's own location. Further drops of
+// the same pincode are spread on rings around it so neighbouring drops are
+// REPEAT_DROP_ROAD_KM apart by road distance (straight line x 1.25 road factor):
+// ring 1 holds 6 drops, ring 2 holds 12, ring 3 holds 18, ...
+const REPEAT_DROP_ROAD_KM = 5;
+function repeatDropOffset(lat, lng, k) {
+  if (k === 0) return {lat, lng};
+  let ring = 1, idx = k - 1;
+  while (idx >= 6 * ring) { idx -= 6 * ring; ring++; }
+  const ang = (idx / (6 * ring)) * 2 * Math.PI;
+  const rKm = (REPEAT_DROP_ROAD_KM / 1.25) * ring;
+  return {
+    lat: lat + (rKm * Math.cos(ang)) / KM_PER_DEG_LAT,
+    lng: lng + (rKm * Math.sin(ang)) / (KM_PER_DEG_LAT * Math.cos(lat * DEG))
+  };
 }
 
 // ── K-Means++ clustering ──────────────────────────────────────────────
@@ -387,13 +406,15 @@ function compute() {
 
   const {lat: oLat, lng: oLng} = geoMap.get(originPin);
   const notFound = [], stops = [];
-  const seen = new Set([originPin]);
+  const repeatCount = new Map();   // pincode -> drops already placed for it
 
   for (const p of inputPins) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    if (!geoMap.has(p)) { notFound.push(p); continue; }
-    const {lat, lng} = geoMap.get(p);
+    if (p === originPin) continue;              // destination same as the depot pincode
+    if (!geoMap.has(p)) { if (!notFound.includes(p)) notFound.push(p); continue; }
+    const k = repeatCount.get(p) || 0;          // repeated pincode = separate drop
+    repeatCount.set(p, k + 1);
+    const base = geoMap.get(p);
+    const {lat, lng} = repeatDropOffset(base.lat, base.lng, k);
     stops.push({pin: p, lat, lng});
   }
 
