@@ -119,7 +119,7 @@
 
     <div class="tpl-row">
       <button class="btn-tpl" onclick="downloadTemplate()">&#11015; Download Input Template</button>
-      <span class="tpl-hint">Fill in the CSV and upload it below &mdash; origin, weight &amp; frequency included.</span>
+      <span class="tpl-hint">Fill in the template and upload it below &mdash; origin, weight, frequency, speed &amp; customer type (Anchor / Regular).</span>
     </div>
 
     <div class="drop" id="pcDrop">
@@ -133,6 +133,10 @@
     <div class="divider">&#8212; or paste destination pincodes only &#8212;</div>
     <label>Pincodes (comma or newline separated — no weight/frequency)</label>
     <textarea id="pcArea" placeholder="515402, 515408, 515413, 515401 ..."></textarea>
+
+    <label style="margin-top:14px">Anchor Customer Pincodes <span class="opt">optional &mdash; customers with 3 to 5 shipments a week</span></label>
+    <textarea id="anchorPins" style="min-height:60px" placeholder="e.g. 515402, 515211 &mdash; or fill the Customer Type column in the template"></textarea>
+    <div class="tpl-hint" style="margin-top:6px">Each drop is marked <b>Anchor</b> or <b>Regular</b>: from this box first, then the template&rsquo;s Customer Type column; if both are blank, Anchor automatically when Shipments per Year &ge; 156 (3 a week).</div>
   </div>
 
   <!-- Step 2: Config -->
@@ -149,49 +153,49 @@
       </div>
       <div>
         <label>Min Shipments/Year to Include</label>
-        <input type="number" id="minShipmentsPerYear" value="12" min="0" placeholder="0 = no filter" />
+        <input type="number" id="minShipmentsPerYear" value="0" min="0" placeholder="0 = no filter" />
       </div>
     </div>
     <div class="row3" style="margin-bottom:16px">
       <div>
         <label>Min Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(hard minimum)</span></label>
-        <input type="number" id="minStops" value="4" min="1" max="20" />
+        <input type="number" id="minStops" value="0" min="0" />
       </div>
       <div>
         <label>Min Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
-        <input type="number" id="minDrops" value="4" min="0" max="20" step="0.5" />
+        <input type="number" id="minDrops" value="0" min="0" step="0.5" />
       </div>
       <div>
         <label>Max Pincodes per Cluster <span style="font-weight:400;color:var(--muted)">(hard cap)</span></label>
-        <input type="number" id="maxPins" value="10" min="1" max="50" />
+        <input type="number" id="maxPins" value="0" min="0" />
       </div>
     </div>
     <div class="row3" style="margin-bottom:16px">
       <div>
         <label>Max Drops per Cluster <span style="font-weight:400;color:var(--muted)">(slot-weight sum)</span></label>
-        <input type="number" id="maxDrops" value="6" min="1" max="50" step="0.5" />
+        <input type="number" id="maxDrops" value="0" min="0" step="0.5" />
       </div>
       <div>
         <label>Min Weight/Trip &#8804;500 km (kg)</label>
-        <input type="number" id="minWeightShortHaul" value="750" min="0" />
+        <input type="number" id="minWeightShortHaul" value="0" min="0" />
       </div>
       <div>
         <label>Min Weight/Trip &#8804;1000 km (kg)</label>
-        <input type="number" id="minWeightMidHaul" value="1000" min="0" />
+        <input type="number" id="minWeightMidHaul" value="0" min="0" />
       </div>
       <div>
         <label>Min Weight/Trip &gt;1000 km (kg)</label>
-        <input type="number" id="minWeightLongHaul" value="1500" min="0" />
+        <input type="number" id="minWeightLongHaul" value="0" min="0" />
       </div>
     </div>
     <div class="row2" style="margin-bottom:16px">
       <div>
         <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(extra stops allowed when merging small clusters)</span></label>
-        <input type="number" id="deviationStops" value="1" min="0" max="10" />
+        <input type="number" id="deviationStops" value="0" min="0" />
       </div>
       <div>
         <label>Grid Cell Size (km) <span class="opt">merge adjacency radius</span></label>
-        <input type="number" id="cellKm" value="100" min="10" max="2000" step="10" />
+        <input type="number" id="cellKm" value="0" min="0" step="10" />
       </div>
     </div>
     <div class="row2" style="margin-top:4px;margin-bottom:4px;">
@@ -207,16 +211,20 @@
     <div class="row3" style="margin-top:14px;">
       <div>
         <label>Vehicle Speed (km/h) <span class="opt">optional</span></label>
-        <input type="number" id="speed" min="1" max="200" value="40" />
+        <input type="number" id="speed" min="0" value="0" />
       </div>
       <div>
         <label>Time at Each Stop (min)</label>
-        <input type="number" id="timeAtStop" min="0" value="30" />
+        <input type="number" id="timeAtStop" min="0" value="0" />
       </div>
       <div>
         <label>Time at Origin (min)</label>
-        <input type="number" id="timeAtOrigin" min="0" value="60" />
+        <input type="number" id="timeAtOrigin" min="0" value="0" />
       </div>
+    </div>
+    <div class="algo-box" style="margin-bottom:10px">
+      <strong>All settings start at 0 = not applied.</strong> Enter a value only for the limits you want; any setting left at 0 is ignored
+      (no minimum, no maximum, no weight floor, no grid, no time calculation).
     </div>
     <div class="algo-box">
       <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed 5 km apart (road distance) around the pincode; all drops of one pincode always stay in the same cluster. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
@@ -274,6 +282,34 @@ const RING_KM      = [100, 200, 400, 800, Infinity];
 const RING_SECTORS = [8, 12, 16, 20, 24];
 const RING_LABELS  = ['0–100 km','100–200 km','200–400 km','400–800 km','800 km+'];
 
+// ── Anchor / Regular customers ────────────────────────────────────────
+// Anchor customer = 3 to 5 shipments a week (at least 3/week = 156/year).
+// Order of precedence: the Anchor Pincodes box, then the template's Customer
+// Type column; if both are blank, a destination with at least 156
+// shipments/year is marked Anchor automatically, otherwise Regular.
+const ANCHOR_MIN_PER_WEEK = 3;
+function parseCustomerType(v) {
+  const t = String(v === undefined || v === null ? '' : v).trim().toLowerCase();
+  if (t.startsWith('a')) return 'Anchor';
+  if (t.startsWith('r')) return 'Regular';
+  return '';
+}
+function anchorPinsFromBox() {
+  const el = document.getElementById('anchorPins');
+  const set = new Set();
+  if (!el) return set;
+  for (const tok of el.value.split(/[\s,;|\t\r\n]+/)) {
+    const s = tok.trim().replace(/\D/g, '');
+    if (/^[1-9]\d{5}$/.test(s)) set.add(s);
+  }
+  return set;
+}
+function resolveCustomerType(p, anchorBox) {
+  if (anchorBox && anchorBox.has(p.pin)) return 'Anchor';
+  if (p.customerType) return p.customerType;
+  return (p.shipmentsPerYear || 0) >= ANCHOR_MIN_PER_WEEK * 52 ? 'Anchor' : 'Regular';
+}
+
 // ── Template download ─────────────────────────────────────────────────
 function downloadTemplate() {
   if (typeof XLSX === 'undefined') { alert('Please wait — library loading'); return; }
@@ -281,15 +317,15 @@ function downloadTemplate() {
   const oName  = document.getElementById('originName').value.trim() || 'Hub1';
   const wb = XLSX.utils.book_new();
   const data = [
-    ['Origin Name', 'Origin Pincode', 'Destination Pincode', 'Avg Weight per Shipment (kg)', 'Shipments per Year', 'Speed (km/h)'],
-    [oName,    origin,   '515402', 150, 200, 45],
-    [oName,    origin,   '515408', 200, 100, 45],
-    [oName,    origin,   '515413', 120,  52, 45],
-    ['Hub2', '503321', '515201', 100,  30, 40],
-    ['Hub2', '503321', '515211',  75,  78, 40],
+    ['Origin Name', 'Origin Pincode', 'Destination Pincode', 'Avg Weight per Shipment (kg)', 'Shipments per Year', 'Speed (km/h)', 'Customer Type (Anchor/Regular)'],
+    [oName,    origin,   '515402', 150, 208, 45, 'Anchor'],
+    [oName,    origin,   '515408', 200, 100, 45, 'Regular'],
+    [oName,    origin,   '515413', 120,  52, 45, ''],
+    ['Hub2', '503321', '515201', 100,  30, 40, 'Regular'],
+    ['Hub2', '503321', '515211',  75, 156, 40, 'Anchor'],
   ];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}, {wch:30}, {wch:22}, {wch:14}];
+  ws['!cols'] = [{wch:16}, {wch:18}, {wch:22}, {wch:30}, {wch:22}, {wch:14}, {wch:30}];
   XLSX.utils.book_append_sheet(wb, ws, 'Milkrun Input');
   XLSX.writeFile(wb, 'milkrun_input_template.xlsb', {bookType: 'xlsb'});
 }
@@ -374,11 +410,12 @@ function parseTemplate(text) {
       const weight           = parseFloat(parts[3]) || 0;
       const shipmentsPerYear = parseFloat(parts[4]) || 0;
       const speed            = parseFloat(parts[5]) || 0;
+      const customerType     = parseCustomerType(parts[6]);
       if (weight > 0) hasWeight = true;
       if (origName) nameMap.set(origPin, origName);
       if (speed > 0 && !speedMap.has(origPin)) speedMap.set(origPin, speed);
       if (!originMap.has(origPin)) originMap.set(origPin, []);
-      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear, customerType});
     }
     return {isMulti: true, originMap, originNameMap: nameMap, originSpeedMap: speedMap, hasWeight};
   }
@@ -442,11 +479,12 @@ function parseTemplateRows(rows) {
       const weight           = parseFloat(row[3]) || 0;
       const shipmentsPerYear = parseFloat(row[4]) || 0;
       const speed            = parseFloat(row[5]) || 0;
+      const customerType     = parseCustomerType(row[6]);
       if (weight > 0) hasWeight = true;
       if (origName) nameMap.set(origPin, origName);
       if (speed > 0 && !speedMap.has(origPin)) speedMap.set(origPin, speed);
       if (!originMap.has(origPin)) originMap.set(origPin, []);
-      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear});
+      originMap.get(origPin).push({pin: destPin, weight, shipmentsPerYear, customerType});
     }
     return {isMulti: true, originMap, originNameMap: nameMap, originSpeedMap: speedMap, hasWeight};
   }
@@ -1028,7 +1066,8 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     repeatCount.set(p.pin, k + 1);
     const base = geoMap.get(p.pin);
     const {lat, lng} = repeatDropOffset(base.lat, base.lng, k);
-    rawStops.push({pin: p.pin, lat, lng, baseLat: base.lat, baseLng: base.lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0});
+    rawStops.push({pin: p.pin, lat, lng, baseLat: base.lat, baseLng: base.lng, weight: p.weight||0, shipmentsPerYear, slotWeight: 1.0,
+      customerType: resolveCustomerType(p, cfg.anchorPins)});
   }
 
   if (!rawStops.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, belowMin:[], stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
@@ -1152,6 +1191,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     let cum = 0, cumTimeMins = timeAtOrigMins;
     const clusterRawWt  = tour.reduce((s,t) => s+(t.weight||0), 0);
     const clusterSlotSum = cl.reduce((s,st) => s+(st.slotWeight||1), 0);
+    const anchorCount    = cl.filter(st => st.customerType === 'Anchor').length;
     totalWeight += clusterRawWt;
 
     const ringIdxes    = tour.map(t => getRing(distRaw(oLat,oLng,t.lat,t.lng)));
@@ -1161,6 +1201,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       + '<span class="cl-badge" style="background:' + color + '">' + clusterLabel + '</span>'
       + (cfg.multiOrigin ? '<span class="ring-pill" style="background:#e0e7ff;color:#3730a3;">&#128204; ' + originPin + '</span>' : '')
       + '<span>' + cl.length + ' pincode' + (cl.length!==1?'s':'') + '</span>'
+      + '<span class="ring-pill" style="background:#fef3c7;color:#92400e;">&#9875; ' + anchorCount + ' anchor' + (anchorCount!==1?'s':'') + '</span>'
       + (showFreq ? '<span class="ring-pill" style="background:#f0fdf4;color:#15803d;">&#9889; ' + clusterSlotSum.toFixed(1) + ' avg drops/trip</span>' : '')
       + '<span class="ring-pill">' + RING_LABELS[dominantRing] + '</span>'
       + '<span class="cl-meta">'
@@ -1170,7 +1211,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       + '</span></div>';
 
     tableHtml += '<div class="tbl-wrap"><table><thead><tr>'
-      + '<th>#</th><th>From Pincode</th><th>To Pincode</th>'
+      + '<th>#</th><th>From Pincode</th><th>To Pincode</th><th>Customer Type</th>'
       + '<th>Leg (km)</th><th>Cumulative (km)</th>'
       + (showWeight ? '<th>Avg Wt (kg)</th>' : '')
       + (showFreq   ? '<th>Ship/Yr</th><th>Slot Wt</th>' : '')
@@ -1182,7 +1223,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
     let cumWt = 0;
     for (let vi = 0; vi < tour.length; vi++) {
-      const {pin, leg, weight, shipmentsPerYear, slotWeight} = tour[vi];
+      const {pin, leg, weight, shipmentsPerYear, slotWeight, customerType} = tour[vi];
       cum += leg;
       cumWt += weight * slotWeight;
       const travelMins = speedKmh>0 ? (leg/speedKmh)*60 : 0;
@@ -1192,6 +1233,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td>'+(vi+1)+'</td>'
         + '<td class="mono">'+from+'</td>'
         + '<td class="mono">'+pin+'</td>'
+        + '<td>'+(customerType==='Anchor' ? '<b style="color:#92400e">&#9875; Anchor</b>' : '<span class="dim">Regular</span>')+'</td>'
         + '<td class="dim">'+leg.toFixed(2)+'</td>'
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">'+(weight>0?weight:'—')+'</td>' : '')
@@ -1207,7 +1249,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         slotWeight: shipmentsPerYear>0 ? slotWeight.toFixed(2) : '',
         cumWt: showWeight ? Math.round(cumWt) : '',
         travelMins:speedKmh>0?travelMins.toFixed(0):'', serviceMins:timeAtStopMins||'',
-        cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):''});
+        cumulTimeHrs:hasTime?(cumTimeMins/60).toFixed(2):'', customerType: customerType||''});
     }
 
     if (returnToOrig && tour.length>0) {
@@ -1219,6 +1261,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
         + '<td style="color:var(--muted);">Return</td>'
         + '<td class="mono">'+last.pin+'</td>'
         + '<td class="mono" style="color:var(--teal);">'+originPin+'</td>'
+        + '<td class="dim">—</td>'
         + '<td class="dim">'+retLeg.toFixed(2)+'</td>'
         + '<td class="hi">'+cum.toFixed(2)+'</td>'
         + (showWeight ? '<td class="dim">—</td>' : '')
@@ -1257,7 +1300,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       firstLastSum: firstLastSum.toFixed(2),
       totalWeight: clusterRawWt||'',
       avgWeightPerTrip: showWeight && weightPerTrip>0 ? Math.round(weightPerTrip) : '',
-      totalTATHrs, flag
+      totalTATHrs, flag, anchors: anchorCount
     });
 
     tableHtml = tableHtml.replace('id="clkm'+globalCi+'"',
@@ -1270,21 +1313,23 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
 
 // ── Compute ───────────────────────────────────────────────────────────
 function compute() {
-  const minStops           = Math.max(1, parseInt(document.getElementById('minStops').value)||4);
-  const minDrops           = Math.max(0, parseFloat(document.getElementById('minDrops').value)||0);
-  const maxPins            = Math.max(minStops, parseInt(document.getElementById('maxPins').value)||10);
-  const maxDrops           = Math.max(1, parseFloat(document.getElementById('maxDrops').value)||10);
-  const minShipmentsPerYear = Math.max(0, parseInt(document.getElementById('minShipmentsPerYear').value)||0);
-  const minWeightShortHaul  = Math.max(0, parseFloat(document.getElementById('minWeightShortHaul').value)||0);
-  const minWeightMidHaul    = Math.max(0, parseFloat(document.getElementById('minWeightMidHaul').value)||0);
-  const minWeightLongHaul   = Math.max(0, parseFloat(document.getElementById('minWeightLongHaul').value)||0);
-  const deviationStops     = Math.max(0, parseInt(document.getElementById('deviationStops').value)||0);
+  // Every setting is optional: 0 (or blank) = not applied.
+  const num = id => Math.max(0, parseFloat(document.getElementById(id).value) || 0);
+  const minStops           = Math.max(1, Math.floor(num('minStops')));          // 0 → no minimum
+  const minDrops           = num('minDrops');                                   // 0 → no minimum
+  const maxPins            = num('maxPins')  > 0 ? Math.max(minStops, Math.floor(num('maxPins'))) : Infinity; // 0 → no cap
+  const maxDrops           = num('maxDrops') > 0 ? num('maxDrops') : Infinity;  // 0 → no cap
+  const minShipmentsPerYear = num('minShipmentsPerYear');
+  const minWeightShortHaul  = num('minWeightShortHaul');
+  const minWeightMidHaul    = num('minWeightMidHaul');
+  const minWeightLongHaul   = num('minWeightLongHaul');
+  const deviationStops     = Math.floor(num('deviationStops'));
   const returnToOrig       = document.getElementById('returnToOrigin').checked;
-  const speedKmh           = parseFloat(document.getElementById('speed').value)||0;
-  const timeAtStopMins     = parseFloat(document.getElementById('timeAtStop').value)||0;
-  const timeAtOrigMins     = parseFloat(document.getElementById('timeAtOrigin').value)||0;
+  const speedKmh           = num('speed');
+  const timeAtStopMins     = num('timeAtStop');
+  const timeAtOrigMins     = num('timeAtOrigin');
   const hasTime            = speedKmh>0 || timeAtStopMins>0 || timeAtOrigMins>0;
-  const cellKm             = Math.max(10, parseFloat(document.getElementById('cellKm').value)||100);
+  const cellKm             = num('cellKm') > 0 ? num('cellKm') : Infinity;      // 0 → no grid (one area)
 
   // Build origin→destinations map
   let originGroups;
@@ -1301,7 +1346,8 @@ function compute() {
 
   const cfg = {minStops, minDrops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
     timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
-    minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul, cellKm};
+    minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul, cellKm,
+    anchorPins: anchorPinsFromBox()};
 
   exportRows = []; clusterSummary = [];
   let allTableHtml = '', allTourGroups = [], allNotFound = [], allBelowMin = [];
@@ -1370,7 +1416,7 @@ function dlCSV() {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: Cluster Summary
-  const sumHeaders = ['Origin Pincode','Origin Name','Cluster','Max Pincodes','Avg Drops/Trip','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Avg Mid-Leg (km)','First+Last Leg (km)','Total Weight (kg)','Avg Weight/Trip (kg)','Total TAT (hrs)','Status'];
+  const sumHeaders = ['Origin Pincode','Origin Name','Cluster','Max Pincodes','Avg Drops/Trip','Cumulative Dist (km)','Max Leg (km)','Avg Leg (km)','Avg Mid-Leg (km)','First+Last Leg (km)','Total Weight (kg)','Avg Weight/Trip (kg)','Total TAT (hrs)','Status','Anchor Customers'];
   const sumRows = clusterSummary.map(s => [
     s.origin, s.originName||'', s.name, s.stops,
     s.avgDropsPerTrip!==''?+s.avgDropsPerTrip:'',
@@ -1379,14 +1425,14 @@ function dlCSV() {
     s.totalWeight!==''?+s.totalWeight:'',
     s.avgWeightPerTrip!==''?+s.avgWeightPerTrip:'',
     s.totalTATHrs!==''?+s.totalTATHrs:'',
-    s.flag||''
+    s.flag||'', s.anchors||0
   ]);
   const ws1 = XLSX.utils.aoa_to_sheet([sumHeaders, ...sumRows]);
   ws1['!cols'] = [{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:18},{wch:20},{wch:20},{wch:22},{wch:16},{wch:16}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Clusters');
 
   // Sheet 2: Route Details
-  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Avg Weight/Shipment (kg)','Shipments/Year','Slot Weight','Cumul. Wt/Trip (kg)','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)'];
+  const detHeaders = ['Origin','Cluster','Visit #','From Pincode','To Pincode','Leg (km)','Cumulative (km)','Avg Weight/Shipment (kg)','Shipments/Year','Slot Weight','Cumul. Wt/Trip (kg)','Travel Time (min)','Service Time (min)','Cumul. Time (hrs)','Customer Type'];
   const detRows = exportRows.map(r => [
     r.origin, r.cluster, r.visit, r.from, r.to, +r.leg, +r.cum,
     r.weight!==''?+r.weight:'',
@@ -1395,7 +1441,7 @@ function dlCSV() {
     r.cumWt!==''?+r.cumWt:'',
     r.travelMins!==''?+r.travelMins:'',
     r.serviceMins!==''?+r.serviceMins:'',
-    r.cumulTimeHrs!==''?+r.cumulTimeHrs:''
+    r.cumulTimeHrs!==''?+r.cumulTimeHrs:'', r.customerType||''
   ]);
   const ws2 = XLSX.utils.aoa_to_sheet([detHeaders, ...detRows]);
   ws2['!cols'] = [{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:22},{wch:20},{wch:20},{wch:18}];
@@ -1441,21 +1487,21 @@ function openOutputTab(statsHtml, alertHtml, tableHtml, tourGroups, expRows, clu
     +'function dlCSV(){'
     +'if(typeof XLSX==="undefined"){setTimeout(dlCSV,500);return;}'
     +'var wb=XLSX.utils.book_new();'
-    +'var sh=["Origin Pincode","Origin Name","Cluster","Max Pincodes","Avg Drops/Trip","Cumulative Dist (km)","Max Leg (km)","Avg Leg (km)","Avg Mid-Leg (km)","First+Last Leg (km)","Total Weight (kg)","Avg Weight/Trip (kg)","Total TAT (hrs)","Status"];'
+    +'var sh=["Origin Pincode","Origin Name","Cluster","Max Pincodes","Avg Drops/Trip","Cumulative Dist (km)","Max Leg (km)","Avg Leg (km)","Avg Mid-Leg (km)","First+Last Leg (km)","Total Weight (kg)","Avg Weight/Trip (kg)","Total TAT (hrs)","Status","Anchor Customers"];'
     +'var sr=CS.map(function(s){return[s.origin,s.originName||"",s.name,s.stops,'
     +'s.avgDropsPerTrip!==""?+s.avgDropsPerTrip:"",+s.cumDist,+s.maxLeg,+s.avgLeg,'
     +'+s.avgMidLeg,+s.firstLastSum,'
     +'s.totalWeight!==""?+s.totalWeight:"",s.avgWeightPerTrip!==""?+s.avgWeightPerTrip:"",'
-    +'s.totalTATHrs!==""?+s.totalTATHrs:"",s.flag||""];});'
+    +'s.totalTATHrs!==""?+s.totalTATHrs:"",s.flag||"",s.anchors||0];});'
     +'var ws1=XLSX.utils.aoa_to_sheet([sh].concat(sr));'
     +'ws1["!cols"]=[{wch:14},{wch:16},{wch:18},{wch:14},{wch:16},{wch:22},{wch:14},{wch:14},{wch:18},{wch:20},{wch:20},{wch:22},{wch:16},{wch:16}];'
     +'XLSX.utils.book_append_sheet(wb,ws1,"Clusters");'
-    +'var dh=["Origin","Cluster","Visit #","From Pincode","To Pincode","Leg (km)","Cumulative (km)","Avg Weight/Shipment (kg)","Shipments/Year","Slot Weight","Cumul. Wt/Trip (kg)","Travel Time (min)","Service Time (min)","Cumul. Time (hrs)"];'
+    +'var dh=["Origin","Cluster","Visit #","From Pincode","To Pincode","Leg (km)","Cumulative (km)","Avg Weight/Shipment (kg)","Shipments/Year","Slot Weight","Cumul. Wt/Trip (kg)","Travel Time (min)","Service Time (min)","Cumul. Time (hrs)","Customer Type"];'
     +'var dr=ER.map(function(r){return[r.origin,r.cluster,r.visit,r.from,r.to,+r.leg,+r.cum,'
     +'r.weight!==""?+r.weight:"",r.shipmentsPerYear!==""?+r.shipmentsPerYear:"",'
     +'r.slotWeight!==""?+r.slotWeight:"",r.cumWt!==""?+r.cumWt:"",'
     +'r.travelMins!==""?+r.travelMins:"",r.serviceMins!==""?+r.serviceMins:"",'
-    +'r.cumulTimeHrs!==""?+r.cumulTimeHrs:""];});'
+    +'r.cumulTimeHrs!==""?+r.cumulTimeHrs:"",r.customerType||""];});'
     +'var ws2=XLSX.utils.aoa_to_sheet([dh].concat(dr));'
     +'ws2["!cols"]=[{wch:12},{wch:18},{wch:10},{wch:16},{wch:16},{wch:12},{wch:16},{wch:24},{wch:16},{wch:12},{wch:22},{wch:20},{wch:20},{wch:18}];'
     +'XLSX.utils.book_append_sheet(wb,ws2,"Route Details");'
