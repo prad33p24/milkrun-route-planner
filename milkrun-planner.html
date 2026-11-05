@@ -188,7 +188,11 @@
         <input type="number" id="minWeightLongHaul" value="0" min="0" />
       </div>
     </div>
-    <div class="row2" style="margin-bottom:16px">
+    <div class="row3" style="margin-bottom:16px">
+      <div>
+        <label>Min Anchor Customers per Route <span style="font-weight:400;color:var(--muted)">(0 = not applied)</span></label>
+        <input type="number" id="minAnchors" value="0" min="0" />
+      </div>
       <div>
         <label>Deviation Stops <span style="font-weight:400;color:var(--muted)">(extra stops allowed when merging small clusters)</span></label>
         <input type="number" id="deviationStops" value="0" min="0" />
@@ -1046,6 +1050,78 @@ function repeatDropOffset(lat, lng, k) {
   };
 }
 
+// ── Minimum anchor customers per route ───────────────────────────────
+// For every route with fewer anchors than Min Anchor Customers per Route:
+//  1. Borrow an anchor pincode (all its drops together) from a nearby route that
+//     has anchors to spare - the donor keeps at least the minimum anchors and
+//     the minimum pincodes. The closest anchor is taken first.
+//  2. If none can be borrowed, merge the route with the nearest route that has
+//     anchors.
+// "Nearby" = grid-adjacent when a Grid Cell Size is set (no cross-cell jumps);
+// with no grid, any route. Both steps respect Max Pincodes + Deviation Stops.
+// A route that still falls short is kept and marked "below anchor minimum".
+function enforceMinAnchors(clusters, cfg, oLat, oLng) {
+  const min = cfg.minAnchors || 0;
+  if (min <= 0 || clusters.length < 2) return clusters;
+  const cap = cfg.maxPins + (cfg.deviationStops || 0);
+  const anchorsIn = cl => cl.filter(st => st.customerType === 'Anchor').length;
+  const cent = cl => ({lat: cl.reduce((s,p)=>s+p.lat,0)/cl.length, lng: cl.reduce((s,p)=>s+p.lng,0)/cl.length});
+  const near = (a, b) => {
+    if (!isFinite(cfg.cellKm)) return true;
+    const ga = clGridCell(a, oLat, oLng, cfg.cellKm), gb = clGridCell(b, oLat, oLng, cfg.cellKm);
+    return Math.abs(ga.row - gb.row) <= 1 && Math.abs(ga.col - gb.col) <= 1;
+  };
+  let cls = clusters.map(c => [...c]);
+
+  for (let guard = 0; guard < 1000; guard++) {
+    const needy = cls.filter(c => anchorsIn(c) < min);
+    if (!needy.length) break;
+
+    // Step 1: borrow the closest spare anchor pincode
+    let best = null;
+    for (const t of needy) {
+      const ct = cent(t);
+      for (const d of cls) {
+        if (d === t || !near(t, d)) continue;
+        const dA = anchorsIn(d);
+        for (const grp of pinGroups(d)) {
+          const a = grp.filter(st => st.customerType === 'Anchor').length;
+          if (!a) continue;
+          if (dA - a < min) continue;                      // donor must keep its own minimum
+          if (d.length - grp.length < cfg.minStops) continue;
+          if (t.length + grp.length > cap) continue;
+          const dist = distRaw(baseLatOf(grp[0]), baseLngOf(grp[0]), ct.lat, ct.lng);
+          if (!best || dist < best.dist) best = {t, d, grp, dist};
+        }
+      }
+    }
+    if (best) {
+      const ids = new Set(best.grp);
+      const di = cls.indexOf(best.d);
+      cls[di] = best.d.filter(st => !ids.has(st));
+      best.t.push(...best.grp);
+      continue;
+    }
+
+    // Step 2: merge with the nearest route that has anchors
+    let mBest = null;
+    for (const t of needy) {
+      const ct = cent(t);
+      for (const d of cls) {
+        if (d === t || !near(t, d) || !anchorsIn(d)) continue;
+        if (t.length + d.length > cap) continue;
+        const cd = cent(d);
+        const dist = distRaw(ct.lat, ct.lng, cd.lat, cd.lng);
+        if (!mBest || dist < mBest.dist) mBest = {t, d, dist};
+      }
+    }
+    if (!mBest) break;                                     // nothing more can be done
+    mBest.d.push(...mBest.t);
+    cls = cls.filter(c => c !== mBest.t);
+  }
+  return cls.filter(c => c.length > 0);
+}
+
 // ── Per-origin processing ────────────────────────────────────────────
 function processOrigin(originPin, inputPins, cfg, colorOffset) {
   const originName = (originNameMap.get(originPin) || '').trim() || originPin;
@@ -1081,7 +1157,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
   // No output without meeting the minimum. buildClusters only leaves a cluster
   // under it when this origin has fewer pincodes than the minimum in total -
   // those pincodes are reported as not routed rather than shown as a route.
-  const clusters = built.filter(cl => cl.length >= cfg.minStops);
+  const clusters = enforceMinAnchors(built.filter(cl => cl.length >= cfg.minStops), cfg, oLat, oLng);
   const belowMin = built.filter(cl => cl.length < cfg.minStops).flat().map(s => s.pin);
   if (!clusters.length) return {tableHtml:'', toursByCluster:[], clusterLabels:[], summaryRows:[], detailRows:[], notFound, belowMin, stopCount:0, longestKm:0, totalWeight:0, oLat, oLng, clusterCount:0};
 
@@ -1192,6 +1268,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     const clusterRawWt  = tour.reduce((s,t) => s+(t.weight||0), 0);
     const clusterSlotSum = cl.reduce((s,st) => s+(st.slotWeight||1), 0);
     const anchorCount    = cl.filter(st => st.customerType === 'Anchor').length;
+    const anchorShort    = cfg.minAnchors > 0 && anchorCount < cfg.minAnchors;
     totalWeight += clusterRawWt;
 
     const ringIdxes    = tour.map(t => getRing(distRaw(oLat,oLng,t.lat,t.lng)));
@@ -1202,6 +1279,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       + (cfg.multiOrigin ? '<span class="ring-pill" style="background:#e0e7ff;color:#3730a3;">&#128204; ' + originPin + '</span>' : '')
       + '<span>' + cl.length + ' pincode' + (cl.length!==1?'s':'') + '</span>'
       + '<span class="ring-pill" style="background:#fef3c7;color:#92400e;">&#9875; ' + anchorCount + ' anchor' + (anchorCount!==1?'s':'') + '</span>'
+      + (anchorShort ? '<span class="ring-pill" style="background:#fee2e2;color:#b91c1c;">&#9888; Below anchor minimum (' + cfg.minAnchors + ')</span>' : '')
       + (showFreq ? '<span class="ring-pill" style="background:#f0fdf4;color:#15803d;">&#9889; ' + clusterSlotSum.toFixed(1) + ' avg drops/trip</span>' : '')
       + '<span class="ring-pill">' + RING_LABELS[dominantRing] + '</span>'
       + '<span class="cl-meta">'
@@ -1300,7 +1378,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
       firstLastSum: firstLastSum.toFixed(2),
       totalWeight: clusterRawWt||'',
       avgWeightPerTrip: showWeight && weightPerTrip>0 ? Math.round(weightPerTrip) : '',
-      totalTATHrs, flag, anchors: anchorCount
+      totalTATHrs, flag: [flag, anchorShort ? 'below anchor minimum' : ''].filter(Boolean).join('; '), anchors: anchorCount
     });
 
     tableHtml = tableHtml.replace('id="clkm'+globalCi+'"',
@@ -1330,6 +1408,7 @@ function compute() {
   const timeAtOrigMins     = num('timeAtOrigin');
   const hasTime            = speedKmh>0 || timeAtStopMins>0 || timeAtOrigMins>0;
   const cellKm             = num('cellKm') > 0 ? num('cellKm') : Infinity;      // 0 → no grid (one area)
+  const minAnchors         = Math.floor(num('minAnchors'));                     // 0 → not applied
 
   // Build origin→destinations map
   let originGroups;
@@ -1347,7 +1426,7 @@ function compute() {
   const cfg = {minStops, minDrops, maxPins, maxDrops, deviationStops, returnToOrig, speedKmh,
     timeAtStopMins, timeAtOrigMins, hasTime, multiOrigin: originGroups.size>1,
     minShipmentsPerYear, minWeightShortHaul, minWeightMidHaul, minWeightLongHaul, cellKm,
-    anchorPins: anchorPinsFromBox()};
+    anchorPins: anchorPinsFromBox(), minAnchors};
 
   exportRows = []; clusterSummary = [];
   let allTableHtml = '', allTourGroups = [], allNotFound = [], allBelowMin = [];
