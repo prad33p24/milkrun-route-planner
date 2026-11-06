@@ -176,15 +176,15 @@
         <input type="number" id="maxDrops" value="0" min="0" step="0.5" />
       </div>
       <div>
-        <label>Min Weight/Trip &#8804;500 km (kg)</label>
+        <label>Min Weight/Trip &gt;500 km (kg) <span class="opt">500&ndash;1000 km</span></label>
         <input type="number" id="minWeightShortHaul" value="0" min="0" />
       </div>
       <div>
-        <label>Min Weight/Trip &#8804;1000 km (kg)</label>
+        <label>Min Weight/Trip &gt;1000 km (kg) <span class="opt">1000&ndash;1500 km</span></label>
         <input type="number" id="minWeightMidHaul" value="0" min="0" />
       </div>
       <div>
-        <label>Min Weight/Trip &gt;1000 km (kg)</label>
+        <label>Min Weight/Trip &gt;1500 km (kg) <span class="opt">above 1500 km</span></label>
         <input type="number" id="minWeightLongHaul" value="0" min="0" />
       </div>
     </div>
@@ -231,7 +231,7 @@
       (no minimum, no maximum, no weight floor, no grid, no time calculation).
     </div>
     <div class="algo-box">
-      <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed 5 km apart (road distance) around the pincode; all drops of one pincode always stay in the same cluster. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes below the weight/trip floor are merged or flagged.
+      <strong>Algorithm:</strong> Repeated pincodes are kept as separate drops, placed 5 km apart (road distance) around the pincode; all drops of one pincode always stay in the same cluster. <strong>Phase 1</strong> — each stop is assigned to its exact geographic grid cell (row, col) relative to the origin; cell size is set by Grid Cell Size (km). Oversized cells split by bearing. <strong>Phase 2</strong> — cells exceeding Max Drops split further. <strong>Phase 3</strong> — clusters below Min Pincodes or Min Drops merge strictly into a radius-1 grid-adjacent neighbour only; no cross-cell jumps. <strong>Final</strong> — Min Pincodes is enforced as a hard minimum: any cluster still below it is dissolved into its nearest neighbours, even across grid cells. Post-clustering, routes longer than 500 km that are below their weight/trip floor (&gt;500, &gt;1000, &gt;1500 km boxes) are merged or flagged; routes up to 500 km have no weight floor.
     </div>
   </div>
 
@@ -1177,9 +1177,13 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
   const hasWeightData = rawStops.some(s => s.weight > 0);
   const hasFreqData   = rawStops.some(s => s.shipmentsPerYear > 0);
 
+  // Min weight per trip applies only to routes longer than 500 km (route km
+  // to the last drop). Up to 500 km there is no weight floor.
+  //   >500–1000 km → box 1, >1000–1500 km → box 2, >1500 km → box 3
   function weightThreshold(cumKm, cfg) {
-    if (cumKm <= 500)  return cfg.minWeightShortHaul;
-    if (cumKm <= 1000) return cfg.minWeightMidHaul;
+    if (cumKm <= 500)  return 0;
+    if (cumKm <= 1000) return cfg.minWeightShortHaul;
+    if (cumKm <= 1500) return cfg.minWeightMidHaul;
     return cfg.minWeightLongHaul;
   }
 
@@ -1194,7 +1198,7 @@ function processOrigin(originPin, inputPins, cfg, colorOffset) {
     return {cl, tour, cumKm, weightPerTrip, threshold, flag: ''};
   });
 
-  // Viability check — three-tier: ≤500km/750kg, ≤1000km/1000kg, >1000km/1500kg
+  // Viability check — tiers: ≤500 km no floor, >500 / >1000 / >1500 km use the three Min Weight boxes
   const anyThreshold = cfg.minWeightShortHaul > 0 || cfg.minWeightMidHaul > 0 || cfg.minWeightLongHaul > 0;
   if (hasWeightData && anyThreshold) {
     const viable = [], underFloor = [];
